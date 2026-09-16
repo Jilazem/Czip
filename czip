@@ -1,0 +1,3 @@
+#!/bin/sh
+# czip — Hermes oturum paketleyici (motor: ayni dizindeki hkp.py)
+exec /usr/bin/python3 "$(dirname "$0")/hkp.py" "$@"

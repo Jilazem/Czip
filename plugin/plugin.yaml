@@ -1,0 +1,7 @@
+name: czip
+version: 1.0.0
+description: "Oturumu .hkp paketina sikistirir (/czip) ve yeni oturumda paket ACILMADAN okunur (/cunzip)."
+author: czip
+provides_commands:
+  - czip
+  - cunzip
