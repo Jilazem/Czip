@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """/czip + /cunzip — oturumu HKP1 paketine sikistir, yeni oturumda paketi ACMADAN oku.
 
-Motor: <repo>/hkp.py (saf stdlib, MCP gerektirmez).
+Motor: ayni depodaki hkp.py (saf stdlib, MCP gerektirmez).
   /czip                 aktif oturumu paketle + sonraki adim komutlarini yazdir
   /czip son             en son aktif oturumu paketle
   /czip <id>            baska oturumu paketle (onek eslesmesi olur)
   /czip <id> --eksiksiz kirpmasiz mod
+  /czip <id> --jev    buyuk arac ciktilarini Jev'e sor; oluler paketten cikar
   /cunzip <paket.hkp>   INDEKS + son 6 ilet + durum (~30 KB; tam paket baglama GIRMEZ)
   /cunzip <paket> <a-b> yalniz o araliktaki iletileri tam metin ver
 """
@@ -52,6 +53,7 @@ def _paketle(args: str) -> str:
     m = _motor()
     parca = args.split()
     mod = "eksiksiz" if "--eksiksiz" in parca else "akilli"
+    jev = "--jev" in parca
     idler = [p for p in parca if not p.startswith("--")]
     secim = idler[0] if idler else "son"
     if secim == "aktif":
@@ -66,16 +68,19 @@ def _paketle(args: str) -> str:
     os.makedirs(paket_dizin, exist_ok=True)
     ad = _slug(baslik) + "-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".hkp"
     yol = os.path.join(paket_dizin, ad)
-    r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik)
+    r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik, jev=jev)
     _SON["yol"] = r["yol"]
     kirp = ""
     if r.get("eksik_bildirim"):
         kirp = " (kirpilan {} araç çıktısı — eksiksiz modla tam kalır)".format(len(r["eksik_bildirim"]))
+    jv = r.get("jev") or {}
+    jtxt = "" if not jv else " | Jev: sil {} / tut {} / kirp {}".format(
+        jv.get("sil", 0), jv.get("tut", 0), jv.get("kirp", 0))
     return "\n".join([
         "📦 Oturum paketlendi: " + (baslik or sid),
-        "   {} ilet | {:,} -> {:,} B ({:.1f}x) | sozluk {} | parca {}{}".format(
+        "   {} ilet | {:,} -> {:,} B ({:.1f}x) | sozluk {} | parca {}{}{}".format(
             r["mesaj"], r["kaynak_bayt"], r["paket_bayt"], r["oran"],
-            r["sozluk"], r["parca"], kirp),
+            r["sozluk"], r["parca"], kirp, jtxt),
         "   paket: " + r["yol"],
         "",
         "Sonraki adım — yeni oturumda (paket ACILMAZ, sadece okunur):",

@@ -19,7 +19,7 @@ mcp = FastMCP("oturum-sikistirici")
 
 @ mcp.tool()
 def sikistir(girdi: str, cikti: str, mod: str = "akilli",
-             arac_bas: int = 2000, arac_son: int = 2000) -> str:
+             arac_bas: int = 2000, arac_son: int = 2000, jev: bool = False) -> str:
     """Hermes oturum dosyasini/listesini HKP1'e sikistirir.
 
     girdi:  dosya yolu (.json/.jsonl) veya iletilerin JSON/metni
@@ -28,7 +28,10 @@ def sikistir(girdi: str, cikti: str, mod: str = "akilli",
             silinir (bosluk, satir tekrar, sozluk, null'lar, reasoning ikizi);
             'eksiksiz' = her bayt geri doner, hicbir kirpma yok.
     arac_bas/son: akilli modda arac icerigi bas/son dilim baytlari (0 = kirpma).
-    Doner: yol, bayt, oran, mesaj sayisi, sozluk, eksik bildirimi, parca sayisi."""
+    jev:    True = akilli modda buyuk arac ciktilarini Jev'e (System-One) toplu sor;
+            olu olanlar paketten cikarilir (izli marker), gerekenler OLDUGU GIBI
+            kalir, ortalar statik dilime duser. Jev erisilemezse statik dilime doner.
+    Doner: yol, bayt, oran, mesaj sayisi, sozluk, eksik bildirimi, jev raporu, parca sayisi."""
     try:
         kaynak_bayt = None
         if isinstance(girdi, str) and os.path.isfile(os.path.expanduser(girdi.strip())):
@@ -37,7 +40,7 @@ def sikistir(girdi: str, cikti: str, mod: str = "akilli",
         if not mesajlar:
             return hkp.hata("girdiden mesaj cikmadi")
         return json.dumps(hkp.sikistir(mesajlar, cikti, mod, arac_bas, arac_son,
-                                       kaynak_bayt=kaynak_bayt), ensure_ascii=False)
+                                       kaynak_bayt=kaynak_bayt, jev=jev), ensure_ascii=False)
     except Exception as e:
         return hkp.hata(e)
 
@@ -108,15 +111,17 @@ def bilgi(dosya: str) -> str:
 
 
 @ mcp.tool()
-def oturum_sikistir(session_id: str, cikti: str, mod: str = "akilli") -> str:
+def oturum_sikistir(session_id: str, cikti: str, mod: str = "akilli",
+                    jev: bool = False) -> str:
     """Hermes state.db'den oturum okuyup (READ-ONLY) sikistirir — yeni oturuma
     tasinmasi kolay .hkp uretir.
 
     session_id: 'son' / 'en-uzun' / net ID / benzersiz onek.
+    jev: True = buyuk arac ciktilarini Jev'e sor; oluler paketten cikarilir.
     Baska bir sey isterseniz once durum_tablosu ile semayi gorun."""
     try:
         sid, mesajlar, baslik = hkp.oturum_oku(session_id)
-        sonuc = hkp.sikistir(mesajlar, cikti, mod, baslik=baslik)
+        sonuc = hkp.sikistir(mesajlar, cikti, mod, baslik=baslik, jev=jev)
         sonuc["session_id"] = sid
         return json.dumps(sonuc, ensure_ascii=False)
     except Exception as e:

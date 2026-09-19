@@ -1,70 +1,119 @@
-# czip — Hermes oturumlarını AI-okur pakete sıkıştır (HKP1)
+# czip — oturumunu taşı, bağlamını değil
 
-Uzun bir Hermes sohbetini yeni oturuma taşımak istediğinde tüm geçmişi
-bağlama yüklemek hem pahalı hem gereksiz. **czip** oturumu `HKP1` paketine
-sıkıştırır; yeni oturum paketi **açmadan** okur: tek satırlık indeks + son
-iletiler tam, detay gereken yer ise seçili aralık olarak çekilir.
+Uzun bir Hermes sohbetini yeni oturuma taşıdığında tüm geçmiş bağlama
+geri döner; 4 MB'lık oturum = 4 MB'lık token faturası.
+**czip oturumu AI-okur bir pakete (HKP1) sıkıştırır ve yeni oturum o
+paketi asla açmaz** — tek satırlık indeks haritasına bakar, yalnız
+ihtiyacı olan mesaj aralığını okur.
 
-- **Küçük:** 4.3 MB / 1117 iletlik gerçek bir oturum → 237 KB (18x),
-  1 MB'lık oturum → ~120 KB (8.4x kayıpsız, 8.6x akıllı).
-- **Kayıpsız:** `eksiksiz` modda her bayt geri döner (rol, içerik,
-  tool_calls, reasoning, sıra). Akıllı mod yalnız taşıma-anlamı olmayan
-  tekrarı siler ve ne sildiğini bildirir.
-- **Güvenli:** `state.db` daima READ-ONLY; paket dışarıya gitmez, yalnız
-  kendi makinende kalır; silici yok, bozucu yok.
+```
+$ czip paketle son
+PAKETLENDI: a37tvc | 1117 ilet | 4,2 MB → 237 KB (18x)
+```
 
-## Nasıl çalışır (HKP1 formatı)
+![kapak](assets/kapak.png)
 
-Paket = `HKP1` + meta (sözlük jetonları, sabitler) + LZMA gövde.
-Sözlükselleştirme, whitespace/satır-tekrar temizliği ve JSON-sadeleştirme
-sıkıştırma oranını belirgin artırır; iceri_ac jetonları şeffaf çözer.
+## Rakamlar (gerçek oturumlarda, kanıtlı)
+
+| Oturum | Ham | Paket | Oran |
+|---|---|---|---|
+| Oyun geliştirme (1117 ilet, 31 uzun araç çıktısı) | 4,27 MB | 237 KB | **18,0x** |
+| Kod / araştırma (210 ilet) | 997 KB | 119 KB | **8,4x** |
+| Yeni oturumun bağlama girişi | 4,27 MB yerine | **~40 KB** indeks + son iletler | |
+
+## Neden "paket açılmaz"?
+
+Geleneksel kompaksiyon ya geçmişin tamamını yeni oturuma yazar (pahalı)
+ya da özetler (bilgi kaybı). czip ikisini de yapmaz: **harita + isteğe
+bağlı aralık** modeliyle yeni oturum 1117 iletin her birini tek satırda
+görür; ayrıntı gereken mesajı numarasından çeker. Sözlük jetonları
+(`␟3␞`) normal metne benzemez — çakışma yok, geri dönüş birebir
+(round-trip testi: 210/210 ilet bit-bit).
 
 ## Kurulum
 
 ```bash
-# 1) Motor + CLI (macOS/Linux, sadece stdlib — Python 3.9+)
-./install.sh            # czip komutunu PATH'e, plugin'i ~/.hermes/plugins/,
-                        # skill'i ~/.hermes/skills/, MCP'yi config'e ekler
-# 2) Yeni bir Hermes oturumu aç (plugin/MCP açılışta yüklenir)
+git clone https://github.com/Jilazem/hermes-czip && cd hermes-czip
+./install.sh
 ```
 
-Manuel kurulum istersen: `czip` dosyasını PATH'e kopyala; plugin'i
-`plugin/` klasörüyle `~/.hermes/plugins/czip/` altına; skill'i
-`skills/czip-oturum-paketle/SKILL.md` ile `~/.hermes/skills/` altına
-al; MCP için config'e ekle:
+Kurulum: `czip` CLI (`~/.local/bin`) + Hermes plugin'i (`/czip`,
+`/cunzip` slash komutları) + skill köprüsü + 7 araçlık MCP sunucusu.
+Hermes'i yeniden başlattıktan sonra yeni oturumlarda `/czip` gerçek
+slash komut olarak görünür.
 
-```yaml
-mcp_servers:
-  oturum-sikistirici:
-    command: python3
-    args: [<repo>/mcp_server.py]
+## Komutlar
+
+```
+czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]   → paket + 6 haneli ID
+czip oku <id|son>            → PAKETİ AÇMADAN: indeks + son iletler + durum
+czip aralik <id|son> <bas-bit>  → seçili aralık tam metin (jetonlar çözülü)
+czip ara <id|son> "sorgu"    → paket içi arama, ilgili mesaj i'lerini bul
+czip listele                 → kayıtlı paketler: id | tarih | başlık
 ```
 
-## Kullanım
+Yeni oturumda taşıma akışı:
 
-```bash
-czip paketle son            # aktif oturumu paketle (session_id|son|en-uzun)
-czip oku <paket.hkp|son>    # INDEKS + son 6 ilet + durum (~40 KB)  — PAKET AÇILMAZ
-czip aralik <paket> 40-55   # yalnız o aralığı tam metin oku
+```
+czip oku a37tvc          # harita: hangi mesajda ne var
+czip aralik a37tvc 1040-1060   # sadece gereken kısım
 ```
 
-Yeni oturumda doğal dil de yeterli: _"şu paketi oku, 40-55 arasını getir,
-kaldığım yerden devam et"_.
+## Özellikler
+
+- **Sözselleştirme** — tekrarlayan bloklar sözlük jetonuna iner, ham
+  tekrar pakete girmez (18x'in sırrı).
+- **Kayıpsız mod** — `--eksiksiz`: her bayt geri döner (8,4x).
+- **Durum tespiti** — `oku` çıktısı `kullanici_yaniti_bekliyor` ve son
+  iletin rolüyle "kaldığın yer"i bildirir; yeni oturum aynı yerden devam eder.
+- **Gizlilik** — `state.db` daima READ-ONLY URI ile okunur; paket
+  yalnızca `~/.hermes/session-packs` içine yazılır, hiçbir yere
+  dışarıya gitmez, silme/bozma yetkisi yoktur.
+- **Opsiyonel Jev kapısı** — `--jev`: 1200 B üstü araç çıktılarının
+  "gerekiyor mu?" kararını harici LLM'e (typesafe.ai System-One) toplu
+  sorar; hata ipucu içeren çıktılar asla sorgulanmaz. **Varsayılan
+  kapalıdır**, örnek içerik dışarı gider — açık bayrak + API anahtarı
+  gerektirir, ağ hatasında sessizce statik davranışa döner.
 
 ## Bileşenler
 
-| Dosya | İş |
+| Dosya | Rol |
 |---|---|
-| `hkp.py` | Motor (saf stdlib): paketle/oku/aralık, state.db RO okuyucu, CLI |
-| `czip` | Terminal girişi (`czip paketle/oku/aralik`) |
-| `plugin/` | `/czip` + `/cunzip` Hermes slash komutları |
-| `mcp_server.py` | MCP sunucusu (7 araç: sikistir, iceri_ac, kilavuz, mesajlar, bilgi, oturum_sikistir, durum_tablosu) |
-| `skills/` | Skill köprüsü (slash görünmeden de kullanılır) |
-| `tests/` | Sentetik round-trip testi — `python3 tests/test_roundtrip.py` |
+| `hkp.py` | **motor** — saf stdlib (Python 3.9+, 0 bağımlılık): paketle/oku/ara, CLI, state.db RO okuyucu |
+| `czip` | terminal girişi (tek satır sarmalayıcı) |
+| `plugin/` | Hermes plugin'i — `/czip`, `/cunzip` slash komutları |
+| `mcp_server.py` | 7 araçlık MCP sunucusu (sikistir/iceri_ac/kilavuz/mesajlar/...) |
+| `skills/` | skill köprüsü — komut geçmişi eski süreçte bile çalışır |
+| `scripts/kapak.py` | bu README kapağını üreten Pillow betiği |
+| `tests/` | sentetik round-trip + CLI + aralık testleri (4/4) |
+
+## Format: HKP1
+
+```
+"HKP1" | meta_len (4B BE) | veri_len (4B BE) | LZMA-9e(meta) | LZMA-9e(gövde)
+```
+
+Meta: başlık, sözlük, sayaçlar, format sürümü, paketleme bilgisi.
+Gövde: mesaj kayıt listesi (rol, içerik, araç çağrıları, reasoning,
+zaman damgası) — jetonlar çözülerek okunur.
+
+## Test
+
+```bash
+python3 tests/test_roundtrip.py   # 4/4: paketle→oku→aralik + istatistik
+```
 
 ## Sınırlar
 
-- Plugin/MCP komutları yalnız **yeni açılan** oturumlarda görünür
-  (kayıt süreç açılışında okunur); skill ve terminal girişi anında çalışır.
-- Akıllı mod araç çıktılarını baş/son 2 KB dilime indirger (bildirir);
-  kayıtsız-şartsız taşıma için `--eksiksiz`.
+- `akilli` mod araç çıktılarını 2000+2000 B baş/son dilimine indirger
+  (bildirilir); birebir arşiv gerekiyorsa `--eksiksiz`.
+- Paket dosyaları düz metin LZMA'dır — şifreleme sağlamaz; hassas
+  içerikli oturum paketlerini disk erişimi olan herkese açık tutma.
+- state.db tablo şeması Hermes sürümüne göre değişebilir; motor
+  PRAGMA ile eksik kolonları otomatik atlar.
+- `--jev` harici servistir (varsayılan kapalı); KVKK/veri politikası
+  gerektiren işlerde kullanma.
+
+## Lisans
+
+MIT
