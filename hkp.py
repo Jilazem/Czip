@@ -805,6 +805,8 @@ _ALIAS = {
     "merge": "birlestir",
     "list": "listele",
     "undo": "gerial",
+    "settings": "ayar",
+    "config": "ayar",
     "help": "yardim",
 }
 
@@ -834,6 +836,7 @@ def _main(argv):
               "  czip aralik <paket.hkp|son> <bas-bit>\n"
               "  czip birlestir [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
               "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
+              "  czip ayar [esik 50|kademe 50,75,90|oto on]  -> thresholds & auto mode\n"
               "  czip index [--full]     -> build the searchable store over all packages\n"
               "  czip asearch \"<query>\"   -> search the whole archive (long-term memory)\n"
               "  czip gerial [<dosya>]   -> pasife alinan oturumlari geri ac")
@@ -841,6 +844,15 @@ def _main(argv):
     emir, kalan = argv[0], argv[1:]
     # English is the primary CLI; the original Turkish verbs keep working.
     emir = _ALIAS.get(emir, emir)
+    # /czip_50 , /czip_%75 , czip 50%  -> shorthand for "ayar esik <n>"
+    _m = re.fullmatch(r"%?(\d{1,3})%?", emir)
+    if _m:
+        kalan = ["esik", _m.group(1)] + list(kalan)
+        emir = "ayar"
+    elif emir in ("auto", "oto"):
+        kalan = ["oto", (kalan[0] if kalan else "on")]
+        emir = "ayar"
+
     if emir == "birlestir":
         # Ayni isi yapan 2+ oturumu TEK pakette birlestirir (bkz. birlestir.py).
         # Argumansiz: salt-okunur aday taramasi, hicbir sey yazmaz.
@@ -1018,6 +1030,54 @@ def _main(argv):
             return 0
         for kid, v in sorted(kayit.items(), key=lambda kv: (kv[1].get("t") or ""), reverse=True):
             print(f"{kid} | {v.get('t','')} | {(v.get('baslik') or '')[:60]}")
+        return 0
+    if emir == "ayar":
+        # czip ayar                 -> show settings
+        # czip ayar esik 50         -> offer at %50 of the context window
+        # czip ayar kademe 50,75,90 -> escalating tiers
+        # czip ayar oto on|off      -> decide automatically instead of asking
+        # czip ayar oto-pasif on|off
+        import ayar as _a
+        if not kalan:
+            a = _a.oku()
+            print(T("czip settings (%s)", "czip ayarlari (%s)") % _a.AYAR_YOLU)
+            print("  esik_oran : %%%d" % round(a["esik_oran"] * 100))
+            print("  kademeler : " + ", ".join("%%%d" % round(k * 100) for k in a["kademeler"]))
+            print("  oto       : " + ("ON" if a["oto"] else "off")
+                  + T("   (on = decide and pack without asking)",
+                      "   (on = sormadan karar verip paketler)"))
+            print("  oto_pasif : " + ("ON" if a["oto_pasif"] else "off"))
+            print("  jev       : " + ("ON" if a.get("jev", True) else "off"))
+            return 0
+        anahtar = kalan[0].lower()
+        deger = kalan[1] if len(kalan) > 1 else ""
+        acik = deger.lower() in ("on", "acik", "1", "true", "evet", "yes")
+        try:
+            if anahtar in ("esik", "threshold"):
+                o = float(deger.rstrip("%")) / (100.0 if float(deger.rstrip("%")) > 1 else 1.0)
+                _a.yaz(esik_oran=o)
+                print(T("threshold -> %%%d", "esik -> %%%d") % round(o * 100))
+            elif anahtar in ("kademe", "tiers"):
+                ks = sorted({float(x.strip().rstrip("%")) / 100.0 if float(x.strip().rstrip("%")) > 1
+                             else float(x.strip()) for x in deger.split(",") if x.strip()})
+                _a.yaz(kademeler=ks)
+                print(T("tiers -> %s", "kademeler -> %s")
+                      % ", ".join("%%%d" % round(k * 100) for k in ks))
+            elif anahtar == "oto":
+                _a.yaz(oto=acik)
+                print("oto -> " + ("ON" if acik else "off"))
+            elif anahtar in ("oto-pasif", "oto_pasif"):
+                _a.yaz(oto_pasif=acik)
+                print("oto_pasif -> " + ("ON" if acik else "off"))
+            elif anahtar == "jev":
+                _a.yaz(jev=acik)
+                print("jev -> " + ("ON" if acik else "off"))
+            else:
+                print(T("unknown setting: %s", "bilinmeyen ayar: %s") % anahtar)
+                return 2
+        except ValueError:
+            print(T("bad value: %r", "gecersiz deger: %r") % deger)
+            return 2
         return 0
     if emir == "index":
         # Build/refresh the one searchable store over every package.
