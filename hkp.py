@@ -792,6 +792,31 @@ def harita(dosya, son_n=6, istek_max=40):
     }
 
 
+# --- CLI verb aliases: English primary, Turkish kept for backward compatibility ---
+_ALIAS = {
+    "pack": "paketle",
+    "read": "oku",
+    "map": "harita",
+    "search": "ara",
+    "grep": "ara",
+    "archive-search": "arsivara",
+    "asearch": "arsivara",
+    "range": "aralik",
+    "merge": "birlestir",
+    "list": "listele",
+    "undo": "gerial",
+    "help": "yardim",
+}
+
+# Output language: English by default; CZIP_LANG=tr restores Turkish.
+LANG = (os.environ.get("CZIP_LANG") or "en").strip().lower()[:2]
+
+
+def T(en, tr):
+    """Pick the output string for the active language."""
+    return tr if LANG == "tr" else en
+
+
 # ------------------------------------------------------------- CLI
 def _main(argv):
     """czip komutlari:
@@ -809,9 +834,13 @@ def _main(argv):
               "  czip aralik <paket.hkp|son> <bas-bit>\n"
               "  czip birlestir [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
               "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
+              "  czip index [--full]     -> build the searchable store over all packages\n"
+              "  czip asearch \"<query>\"   -> search the whole archive (long-term memory)\n"
               "  czip gerial [<dosya>]   -> pasife alinan oturumlari geri ac")
         return 0
     emir, kalan = argv[0], argv[1:]
+    # English is the primary CLI; the original Turkish verbs keep working.
+    emir = _ALIAS.get(emir, emir)
     if emir == "birlestir":
         # Ayni isi yapan 2+ oturumu TEK pakette birlestirir (bkz. birlestir.py).
         # Argumansiz: salt-okunur aday taramasi, hicbir sey yazmaz.
@@ -989,6 +1018,100 @@ def _main(argv):
             return 0
         for kid, v in sorted(kayit.items(), key=lambda kv: (kv[1].get("t") or ""), reverse=True):
             print(f"{kid} | {v.get('t','')} | {(v.get('baslik') or '')[:60]}")
+        return 0
+    if emir == "index":
+        # Build/refresh the one searchable store over every package.
+        import depo as _d
+        tam = "--full" in kalan or "--tam" in kalan
+        print(T("Indexing packages%s ...", "Paketler indeksleniyor%s ...")
+              % (" (full rebuild)" if tam else ""))
+        r = _d.guncelle(tam=tam)
+        print(T("  new=%d updated=%d unchanged=%d  messages=%d",
+                "  yeni=%d guncellenen=%d degismeyen=%d  ileti=%d")
+              % (r["yeni"], r["guncellenen"], r["atlanan"], r["ileti"]))
+        print(T("  store: %s  (%.1f MB)", "  depo: %s  (%.1f MB)")
+              % (r["depo"], r["boyut"] / 1e6))
+        st = _d.istatistik()
+        if st:
+            print(T("  searchable: %d packages / %d messages",
+                    "  aranabilir: %d paket / %d ileti")
+                  % (st["packages"], st["indexed"]))
+        return 0
+    if emir == "arsivara":
+        # Fast path: use the index when it exists; fall back to scanning packages.
+        try:
+            import depo as _d
+            if os.path.exists(_d.yol()) and kalan and "--tara" not in kalan:
+                r = _d.ara(kalan[0], limit=25)
+                print(T("STORE SEARCH %r — %d hits", "DEPO ARAMA %r — %d isabet")
+                      % (kalan[0], r["total"]))
+                for pk in r["packages"]:
+                    ad = pk["kid"] or os.path.basename(pk["path"])
+                    print("\n%s  [%s]  %s" % (
+                        ad, time.strftime("%d.%m %H:%M", time.localtime(pk["mtime"])),
+                        str(pk["title"])[:60]))
+                    for h in pk["hits"]:
+                        print("   #%s %s: %s" % (h["i"], h["role"], h["snippet"][:150]))
+                    if pk["kid"]:
+                        print("   -> czip range %s <i-i>" % pk["kid"])
+                if not r["packages"]:
+                    print(T("(no hits; `czip index` may be stale)",
+                            "(isabet yok; `czip index` bayat olabilir)"))
+                return 0
+        except Exception as _e:
+            print(T("(index unavailable, scanning packages: %s)",
+                    "(indeks yok, paketler taraniyor: %s)") % str(_e)[:70])
+
+        # TUM paketlerde arama: paket dizini = uzun sureli aranabilir bellek.
+        # Tek tek paket acmak yerine "bu isi nerede yapmistim?" sorusunu cevaplar.
+        if not kalan:
+            print("HATA: kullanim -> czip arsivara \"<sorgu>\" [--paket=N] [--satir=M]")
+            return 2
+        sorgu = kalan[0]
+        pmax = 40
+        smax = 2
+        for a in kalan[1:]:
+            if a.startswith("--paket="):
+                pmax = max(1, int(a.split("=", 1)[1]))
+            elif a.startswith("--satir="):
+                smax = max(1, int(a.split("=", 1)[1]))
+        d = os.path.expanduser(PAKET_DIZIN)
+        if not os.path.isdir(d):
+            print("Paket dizini yok:", d)
+            return 0
+        paketler = sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith(".hkp")),
+                          key=os.path.getmtime, reverse=True)[:pmax]
+        kayit = _kayit_oku()
+        yol2id = {}
+        for k, v in (kayit.items() if isinstance(kayit, dict) else []):
+            y = v.get("yol") if isinstance(v, dict) else v
+            if y:
+                yol2id[os.path.abspath(os.path.expanduser(str(y)))] = k
+        toplam = 0
+        bulunan_paket = 0
+        print("ARSIV ARAMA %r — %d pakette" % (sorgu, len(paketler)))
+        for yol in paketler:
+            try:
+                r = paket_ara(yol, sorgu, max_satir=smax)
+            except Exception:
+                continue
+            son = r if isinstance(r, list) else (r.get("sonuclar") or [])
+            if not son:
+                continue
+            bulunan_paket += 1
+            toplam += len(son)
+            kid = yol2id.get(os.path.abspath(yol))
+            ad = kid or os.path.basename(yol)
+            zaman = time.strftime("%d.%m %H:%M", time.localtime(os.path.getmtime(yol)))
+            print("\n%s  [%s]  %d isabet" % (ad, zaman, len(son)))
+            for x in son[:smax]:
+                es = " ".join(str(x.get("eslesme", "")).split())
+                print("   #%s %s: %s" % (x.get("i"), x.get("rol", "?"), es[:150]))
+            if kid:
+                print("   -> czip aralik %s <i-i>" % kid)
+        print("\nTOPLAM: %d isabet / %d paket" % (toplam, bulunan_paket))
+        if not toplam:
+            print("(hicbir pakette bulunamadi)")
         return 0
     if emir == "ara":
         if len(kalan) < 2:

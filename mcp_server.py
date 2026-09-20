@@ -12,6 +12,7 @@ import json
 import os
 
 import hkp
+import time
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("oturum-sikistirici")
@@ -155,6 +156,108 @@ def durum_tablosu() -> str:
         return json.dumps(out, ensure_ascii=False)
     except Exception as e:
         return hkp.hata(e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LONG-TERM MEMORY — every past session, searchable, for Hermes and any agent.
+# The packages are the archive; depo.py keeps an FTS index over all of them.
+# Typical cost: a hafiza_ara call returns ~200-600 tokens instead of reloading
+# a 90k-token transcript.
+# ─────────────────────────────────────────────────────────────────────────────
+@mcp.tool()
+def hafiza_ara(sorgu: str, limit: int = 8) -> str:
+    """Gecmis TUM oturumlarda ara (uzun sureli hafiza).
+
+    Bir isi daha once yapip yapmadigini, nasil cozdugunu, hangi karari neden
+    verdigini bulmak icin kullan. Tam metin gerekirse donen paket kimligi ve
+    ileti numarasiyla `hafiza_getir` cagir.
+
+    sorgu: aranacak ifade (tam ifade eslesmesi)
+    limit: en fazla kac paket dondurulecek
+    """
+    import depo
+    try:
+        r = depo.ara(sorgu, limit=max(1, min(int(limit), 25)))
+    except Exception as e:
+        return json.dumps({"durum": "hata", "mesaj": str(e),
+                           "ipucu": "once `czip index` calistirin"}, ensure_ascii=False)
+    out = []
+    for pk in r["packages"]:
+        out.append({
+            "paket": pk["kid"] or os.path.basename(pk["path"]),
+            "baslik": str(pk["title"])[:80],
+            "zaman": time.strftime("%Y-%m-%d %H:%M", time.localtime(pk["mtime"])),
+            "isabetler": [{"i": h["i"], "rol": h["role"], "metin": h["snippet"][:200]}
+                          for h in pk["hits"]],
+        })
+    return json.dumps({"durum": "ok", "toplam_isabet": r["total"],
+                       "paketler": out,
+                       "sonraki_adim": "tam metin icin hafiza_getir(paket, aralik)"},
+                      ensure_ascii=False, indent=1)
+
+
+@mcp.tool()
+def hafiza_getir(paket: str, aralik: str) -> str:
+    """hafiza_ara'nin bulduğu iletilerin TAM metnini getirir.
+
+    paket: hafiza_ara'nin dondurdugu paket kimligi
+    aralik: "120" veya "118-125" (en fazla 80 ileti)
+    """
+    import hkp as _h
+    try:
+        yol = _h.id_coz(paket) or paket
+        iletler = _h.mesaj_araligi(yol, aralik)
+    except Exception as e:
+        return json.dumps({"durum": "hata", "mesaj": str(e)}, ensure_ascii=False)
+    return json.dumps({"durum": "ok", "paket": paket, "aralik": aralik,
+                       "iletler": iletler}, ensure_ascii=False, indent=1)
+
+
+@mcp.tool()
+def hafiza_harita(paket: str) -> str:
+    """Bir paketin RAG haritasi: is tanimlari, arac histogrami, son iletler.
+
+    Tam dokumu YUKLEMEZ (~1.5k token). Once bunu al, sonra hafiza_getir ile
+    yalnizca ihtiyacin olan araligi cek.
+    """
+    import hkp as _h
+    try:
+        yol = _h.id_coz(paket) or paket
+        return json.dumps(_h.harita(yol), ensure_ascii=False, indent=1)
+    except Exception as e:
+        return json.dumps({"durum": "hata", "mesaj": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+def hafiza_guncelle(tam: bool = False) -> str:
+    """Hafiza indeksini yeni paketlerle gunceller (artimli; saniyeler surer)."""
+    import depo
+    try:
+        r = depo.guncelle(tam=bool(tam))
+        st = depo.istatistik() or {}
+        return json.dumps({"durum": "ok", "yeni": r["yeni"], "guncellenen": r["guncellenen"],
+                           "degismeyen": r["atlanan"], "indekslenen_ileti": r["ileti"],
+                           "toplam_paket": st.get("packages"),
+                           "toplam_ileti": st.get("indexed"),
+                           "depo_mb": round(r["boyut"] / 1e6, 1)},
+                          ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"durum": "hata", "mesaj": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+def hafiza_durum() -> str:
+    """Hafiza deposunun durumu: kac paket, kac ileti, ne kadar yer, ne kadar guncel."""
+    import depo
+    st = depo.istatistik()
+    if not st:
+        return json.dumps({"durum": "yok", "ipucu": "hafiza_guncelle() ile olusturun"},
+                          ensure_ascii=False)
+    return json.dumps({"durum": "ok", "paket": st["packages"], "ileti": st["indexed"],
+                       "mb": round(st["bytes"] / 1e6, 1),
+                       "en_eski": time.strftime("%Y-%m-%d", time.localtime(st["oldest"] or 0)),
+                       "en_yeni": time.strftime("%Y-%m-%d %H:%M", time.localtime(st["newest"] or 0)),
+                       "yol": st["path"]}, ensure_ascii=False)
 
 
 async def _run(name: str, **kw):

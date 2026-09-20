@@ -269,8 +269,8 @@ def register(ctx: Any) -> None:
     ctx.register_command(
         "czip",
         lambda args="": _paketle(args),
-        description="Oturumu .hkp paketine sıkıştır (yeni oturuma taşımadan önce).",
-        args_hint="[son|aktif|session_id] [--eksiksiz]",
+        description="Oturumu .hkp paketine sıkıştır — aynı işi yapanları otomatik birleştirir.",
+        args_hint="[son|aktif|<id>] [--oto] [--oto-pasif] [--jev] [--eksiksiz]",
     )
     ctx.register_command(
         "cunzip",
@@ -279,8 +279,23 @@ def register(ctx: Any) -> None:
         args_hint="<paket.hkp> [bas-bit]",
     )
     ctx.register_command(
-        "cmerge",
+        "czipmerge",
         lambda args="": _birlestir(args),
         description="Aynı işi yapan 2+ oturumu TEK .hkp paketinde birleştir (Jev karar kapılı).",
         args_hint="[bak|oto|<id1> <id2> ...] [--jev] [--eksiksiz] [--gun=7]",
     )
+    # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
+    ctx.register_command(
+        "czipex",
+        lambda args="": _okur(args),
+        description="Paketi çıkart/oku — RAG yöntemiyle, tam dökümü yüklemeden.",
+        args_hint="<paket.hkp|ID|son> [bas-bit]",
+    )
+    # cunzip zaten yukarida kayitli; yalniz cmerge'in eski adi koprulenir.
+    for _eski, _fn, _ip in (("cmerge", _birlestir, "[bak|oto|<id1> <id2> ...]"),):
+        ctx.register_command(
+            _eski,
+            (lambda f: lambda args="": f(args))(_fn),
+            description="(eski ad — czipex/czipmerge kullanın)",
+            args_hint=_ip,
+        )

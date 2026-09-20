@@ -1,0 +1,182 @@
+# -*- coding: utf-8 -*-
+"""depo.py — one searchable store for every .hkp package (czip long-term memory).
+
+Why: `czip arsivara` opens and LZMA-decodes every package on each query. That is
+fine for 20 packages and hopeless for 2000. This builds a SQLite FTS5 index once,
+then answers in milliseconds and keeps working long after the sessions are gone.
+
+Design notes
+  - Incremental: a package is re-indexed only when its mtime/size changes.
+  - The packages stay the source of truth; the index is a disposable derivative
+    (delete it and `czip index` rebuilds it).
+  - Indexes the FULL message text (CZIP_INDEX_CHARS caps it if you need a smaller
+    store). A partial index is a memory that forgets without telling you.
+    Packages stay the source of truth; `czip range` still returns exact content.
+  - Tokenizer: unicode61 with Turkish characters folded, so ' İMAR' finds 'imar'.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+import time
+
+import hkp
+
+DEPO_YOLU = "~/007-HERMES/05-CIKTILAR/oturum-paketleri/czip-index.db"
+# Full message text is indexed. An earlier 400-char snippet cap made the store
+# fast and small but SILENTLY UNSEARCHABLE past the cap: "database is locked"
+# returned 0 hits although it appears in dozens of tool outputs. A memory that
+# quietly forgets is worse than a bigger file, so the cap is now generous and
+# configurable. FTS5 content is stored once; packages remain the source of truth.
+PARCA = int(os.environ.get("CZIP_INDEX_CHARS", "0")) or None   # None = full text
+KUR = """
+CREATE TABLE IF NOT EXISTS packages (
+    path      TEXT PRIMARY KEY,
+    kid       TEXT,
+    title     TEXT,
+    mtime     REAL,
+    size      INTEGER,
+    msgs      INTEGER,
+    indexed_at REAL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS mfts USING fts5(
+    path UNINDEXED,
+    idx  UNINDEXED,
+    role UNINDEXED,
+    text,
+    tokenize = "unicode61 remove_diacritics 2"
+);
+"""
+
+
+def yol():
+    return os.path.expanduser(DEPO_YOLU)
+
+
+def _ac():
+    d = yol()
+    os.makedirs(os.path.dirname(d), exist_ok=True)
+    con = sqlite3.connect(d, timeout=30)
+    con.executescript(KUR)
+    return con
+
+
+def _paketler():
+    d = os.path.expanduser(hkp.PAKET_DIZIN)
+    if not os.path.isdir(d):
+        return []
+    return sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith(".hkp")),
+                  key=os.path.getmtime, reverse=True)
+
+
+def _kid_haritasi():
+    """short package id -> path, from czip's own registry (best effort)."""
+    out = {}
+    try:
+        kayit = hkp._kayit_oku()
+    except Exception:
+        return out
+    if not isinstance(kayit, dict):
+        return out
+    for k, v in kayit.items():
+        y = v.get("yol") if isinstance(v, dict) else v
+        if y:
+            out[os.path.abspath(os.path.expanduser(str(y)))] = k
+    return out
+
+
+def guncelle(tam=False, ilerleme=None):
+    """Index new/changed packages. Returns a summary dict."""
+    con = _ac()
+    kidler = _kid_haritasi()
+    mevcut = {r[0]: (r[1], r[2]) for r in
+              con.execute("SELECT path, mtime, size FROM packages")}
+    yeni = guncellenen = atlanan = ileti = 0
+    try:
+        for p in _paketler():
+            st = os.stat(p)
+            onceki = mevcut.get(p)
+            if not tam and onceki and abs(onceki[0] - st.st_mtime) < 1 and onceki[1] == st.st_size:
+                atlanan += 1
+                continue
+            try:
+                meta, kayitlar = hkp.yukle(p)
+            except Exception:
+                continue
+            sozluk = meta.get("soz", [])
+            con.execute("DELETE FROM mfts WHERE path = ?", (p,))
+            satir = []
+            for i, k in enumerate(kayitlar):
+                t = hkp.coz_sozluk(str(k.get("c") or ""), sozluk)
+                if not t:
+                    continue
+                t = " ".join(t.split())
+                if PARCA:
+                    t = t[:PARCA]
+                satir.append((p, i, str(k.get("r") or "?"), t))
+            con.executemany("INSERT INTO mfts(path, idx, role, text) VALUES (?,?,?,?)", satir)
+            ileti += len(satir)
+            con.execute(
+                "INSERT INTO packages(path,kid,title,mtime,size,msgs,indexed_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET "
+                "kid=excluded.kid,title=excluded.title,mtime=excluded.mtime,"
+                "size=excluded.size,msgs=excluded.msgs,indexed_at=excluded.indexed_at",
+                (p, kidler.get(os.path.abspath(p)), meta.get("b") or os.path.basename(p),
+                 st.st_mtime, st.st_size, len(kayitlar), time.time()))
+            if onceki:
+                guncellenen += 1
+            else:
+                yeni += 1
+            if ilerleme:
+                ilerleme(p, len(satir))
+        con.commit()
+    finally:
+        con.close()
+    return {"yeni": yeni, "guncellenen": guncellenen, "atlanan": atlanan,
+            "ileti": ileti, "depo": yol(),
+            "boyut": os.path.getsize(yol()) if os.path.exists(yol()) else 0}
+
+
+def ara(sorgu, limit=25, paket_limit=3):
+    """FTS search across every indexed package. Returns grouped hits."""
+    d = yol()
+    if not os.path.exists(d):
+        raise ValueError("index yok — once `czip index` calistir")
+    con = sqlite3.connect("file:%s?mode=ro" % d, uri=True, timeout=15)
+    try:
+        # FTS5 MATCH: quote the query so punctuation cannot break the syntax.
+        q = '"' + str(sorgu).replace('"', '""') + '"'
+        rows = con.execute(
+            "SELECT m.path, m.idx, m.role, snippet(mfts, 3, '<', '>', '…', 18), "
+            "       p.kid, p.title, p.mtime "
+            "FROM mfts m JOIN packages p ON p.path = m.path "
+            "WHERE mfts MATCH ? ORDER BY p.mtime DESC LIMIT ?",
+            (q, limit * paket_limit)).fetchall()
+        toplam = con.execute(
+            "SELECT COUNT(*) FROM mfts WHERE mfts MATCH ?", (q,)).fetchone()[0]
+    finally:
+        con.close()
+    grup, sira = {}, []
+    for path, idx, role, snip, kid, title, mtime in rows:
+        g = grup.setdefault(path, {"kid": kid, "title": title, "mtime": mtime, "hits": []})
+        if path not in sira:
+            sira.append(path)
+        if len(g["hits"]) < paket_limit:
+            g["hits"].append({"i": idx, "role": role, "snippet": snip})
+    return {"total": toplam, "packages": [dict(grup[p], path=p) for p in sira[:limit]]}
+
+
+def istatistik():
+    d = yol()
+    if not os.path.exists(d):
+        return None
+    con = sqlite3.connect("file:%s?mode=ro" % d, uri=True, timeout=10)
+    try:
+        pk, msj = con.execute("SELECT COUNT(*), COALESCE(SUM(msgs),0) FROM packages").fetchone()
+        idx = con.execute("SELECT COUNT(*) FROM mfts").fetchone()[0]
+        en_eski, en_yeni = con.execute(
+            "SELECT MIN(mtime), MAX(mtime) FROM packages").fetchone()
+    finally:
+        con.close()
+    return {"packages": pk, "messages": msj, "indexed": idx, "bytes": os.path.getsize(d),
+            "oldest": en_eski, "newest": en_yeni, "path": d}
