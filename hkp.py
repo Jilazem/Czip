@@ -829,7 +829,7 @@ def _main(argv):
     """
     if not argv or argv[0] in ("-h", "--help", "yardim"):
         print("Kullanim:\n"
-              "  czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]\n"
+              "  czip paketle <session_id|son|en-uzun|DOSYA> [--eksiksiz] [--jev]\n"
               "                 [--oto] ayni isi yapanlari da ayni pakete al\n"
               "                 [--oto-pasif] ayrica kaynaklari kapat+arsivle\n"
               "  czip oku <paket.hkp|son>\n"
@@ -978,7 +978,29 @@ def _main(argv):
             else:
                 print("OTO-BIRLESTIRME: ayni isi yapan baska oturum bulunmadi.")
         if not birlesenler:
-            sid, mesajlar, baslik = oturum_oku(sid)
+            # Bir DOSYA verildiyse oturum kimligi gibi aramadan dogrudan onu paketle.
+            # girdi_ayristir zaten JSON / JSONL / duz metin / Hermes export blogu
+            # ve mesaj listesi biliyor; tek eksik CLI'ye bagli olmamasiydi.
+            _aday = os.path.expanduser(sid)
+            if os.path.isfile(_aday):
+                mesajlar = girdi_ayristir(_aday)
+                if not mesajlar:
+                    print(T("ERROR: file is empty or unparseable: %s",
+                            "HATA: dosya bos ya da cozulemedi: %s") % _aday)
+                    return 2
+                baslik = os.path.splitext(os.path.basename(_aday))[0][:60]
+                # JSON disa aktarimlarinda gercek baslik govdede olabilir.
+                try:
+                    _j = json.loads(open(_aday, encoding="utf-8", errors="replace").read())
+                    if isinstance(_j, dict):
+                        baslik = str(_j.get("title") or _j.get("baslik") or baslik)[:60]
+                except Exception:
+                    pass
+                sid = "dosya:" + os.path.basename(_aday)
+                print(T("FILE INPUT: %s  (%d messages)",
+                        "DOSYA GIRDISI: %s  (%d ileti)") % (_aday, len(mesajlar)))
+            else:
+                sid, mesajlar, baslik = oturum_oku(sid)
         d = os.path.expanduser(PAKET_DIZIN)
         os.makedirs(d, exist_ok=True)
         temiz = re.sub(r"[^A-Za-z0-9-]+", "-", (baslik or sid)[:48]).strip("-") or sid
@@ -1008,7 +1030,7 @@ def _main(argv):
             except Exception as _e:
                 print("  ! PASIFE ALMA BASARISIZ: %s" % str(_e)[:110])
                 print("    Paket URETILDI, kaynaklar ACIK kaldi.")
-        if "--yalniz" not in kalan[1:] and not oto:
+        if "--yalniz" not in kalan[1:] and not oto and not str(sid).startswith("dosya:"):
             try:
                 import birlestir as _b
                 benzer = [x for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
