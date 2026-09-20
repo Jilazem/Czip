@@ -3,12 +3,14 @@
 
 oturum-sikistirici MCP sunucusu ve /czip plugin'i TARAFINDAN ORTAK kullanilir.
 Amaç: uzun bir Hermes oturumunu yeni oturuma tasinacak kadar küçültmek; okuyan AI
-eksiksiz anlayip devam edebilsin. Kayip yok: 'eksiksiz' modda her bayt geri doner.
+eksiksiz anlayip devam edebilsin. Kayip yok: 'eksiksiz' modda her bayt geri doner
+(bu modda arac-ciktisi kirpma, Jev budamasi ve tekrar ayiklama DEVRE DISI).
 
 Format HKP1: "HKP1" + 4B meta_uzunlugu + 4B veri_uzunlugu + LZMA(meta) + LZMA(veri)
 Güvenlik: state.db daima READ-ONLY URI; silme/bozma yok.
 """
 
+import hashlib
 import json
 import lzma
 import os
@@ -27,8 +29,8 @@ JETON_KAP = "\u241e"     # ␞
 JETON_RE = re.compile("\u241f(\\d{1,6})\u241e")
 KOD_IPUCU = re.compile(r"(<[a-zA-Z/!]|function |=>|\bdef \b|\bimport \b|```\|\|.*\||=>|\{\{|\}\})")
 PARCA_ILET = 40
-PAKET_DIZIN = "~/.hermes/session-packs"
-KAYIT_YOL = "~/.hermes/session-packs/kayit.json"
+PAKET_DIZIN = "~/007-HERMES/05-CIKTILAR/oturum-paketleri"
+KAYIT_YOL = "~/007-HERMES/05-CIKTILAR/oturum-paketleri/kayit.json"
 ARAMA_MAX_SATIR = 8
 
 
@@ -537,6 +539,32 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
                 eksikler.append({"i": i, "bayt": len(c) - len(yeni),
                                  **({"jev": "kirp"} if eylem == "kirp" else {})})
                 k["c"] = yeni
+    # ── ARAC CIKTISI TEKRAR AYIKLAMA (2026-09-20 olcum: arac ciktilari toplam
+    # baytin %71'i, ve bunlarin %78'i BIREBIR ayni metin). Ikinci ve sonraki
+    # kopyalar geri-basvuruya cevrilir. Okuyan AI icin kayip yok, hatta daha
+    # iyi: "bu #N ile ayni" bilgisi metni tekrar okumaktan daha kullanisli.
+    # 'eksiksiz' modda da guvenli — atilan bilgi yok, isaret cozulebilir.
+    ilk_gorulen = {}
+    tekrar_sayisi = 0
+    tekrar_bayt = 0
+    # 'eksiksiz' modun SOZU "her bayt geri doner" — tekrar isaretleme bu sozu
+    # bozar (isaret cozulur ama ham bayt aynen geri gelmez). Bu yuzden ayiklama
+    # YALNIZ 'akilli' modda calisir; eksiksiz istendiginde hic dokunulmaz.
+    for i, k in enumerate(kayitlar) if mod != "eksiksiz" else []:
+        c = k.get("c")
+        if k.get("r") != "tool" or not isinstance(c, str) or len(c) < 200:
+            continue
+        if c.startswith("[JEV-SILINDI") or c.startswith("[AYNI-#"):
+            continue
+        h = hashlib.blake2b(c.encode("utf-8", "replace"), digest_size=16).digest()
+        ilk = ilk_gorulen.get(h)
+        if ilk is None:
+            ilk_gorulen[h] = i
+            continue
+        k["c"] = f"[AYNI-#{ilk} — bu arac ciktisi {ilk} numarali iletle birebir ayni; gerekirse orayi oku]"
+        tekrar_sayisi += 1
+        tekrar_bayt += len(c) - len(k["c"])
+
     sozluk = Sozluk()
     sozluk_gecis(kayitlar, sozluk)
     mbayt, vbayt = paketle(kayitlar, sozluk, sabit_adaylari, baslik)
@@ -552,6 +580,7 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
     return {"ok": True, "yol": yol, "paket_bayt": toplam, "kaynak_bayt": kb,
             "oran": round(kb / max(1, toplam), 1), "mesaj": len(kayitlar),
             "sozluk": len(sozluk), "mod": mod, "eksik_bildirim": eksikler or None,
+            "tekrar": tekrar_sayisi, "tekrar_bayt": tekrar_bayt,
             "jev": jev_bilgi,
             "parca": max(1, -(-len(kayitlar) // PARCA_ILET))}
 
@@ -717,6 +746,52 @@ def son_paket(dizin=None):
     return max(dosyalar, key=os.path.getmtime) if dosyalar else None
 
 
+# ============================================================ RAG-ONCELIKLI OKUMA
+# Olcum (2026-09-20, 3421 iletlik gercek oturum):
+#   kilavuz()      -> 93.417 token  (%98'i satir satir INDEKS)
+#   harita()       ->  ~1.500 token (asagida), + gerektikce ara()/mesaj_araligi()
+# Paket dosyasinin kendisi context'e HIC girmez; maliyet yalniz bu ciktidir.
+# Bu yuzden sikistirma orani token maliyetini DEGISTIRMEZ — okunan sey degistirir.
+def harita(dosya, son_n=6, istek_max=40):
+    """Ince harita: is tanimlari + arac histogrami + son iletler + arama ipucu.
+
+    Tam indeks YOK. Okuyan AI once bunu alir, sonra ara()/aralik() ile yalnizca
+    ihtiyaci olan yeri ceker (RAG). Boylece 90k token -> ~1.5k token.
+    """
+    meta, kayitlar = yukle(dosya)
+    sozluk = meta.get("soz", [])
+    roller, araclar = {}, {}
+    istekler = []
+    for i, k in enumerate(kayitlar):
+        r = k.get("r", "?")
+        roller[r] = roller.get(r, 0) + 1
+        for tc in (k.get("tc") or []):
+            n = tc.get("n")
+            if n:
+                araclar[n] = araclar.get(n, 0) + 1
+        if r == "user":
+            c = coz_sozluk(k.get("c") or "", sozluk)
+            c = " ".join(str(c).split())
+            if c and not c.startswith("[") and not c.startswith("──"):
+                istekler.append((i, c[:96]))
+    tekrar = sum(1 for k in kayitlar
+                 if isinstance(k.get("c"), str) and k["c"].startswith("[AYNI-#"))
+    return {
+        "baslik": meta.get("b") or os.path.basename(dosya),
+        "toplam": len(kayitlar),
+        "roller": roller,
+        "araclar": sorted(araclar.items(), key=lambda x: -x[1])[:12],
+        "tekrar_isaretli": tekrar,
+        "istekler": istekler[-istek_max:],
+        "istek_toplam": len(istekler),
+        "son": [tam_ilet(k, sozluk) for k in kayitlar[-son_n:]],
+        "talimat": ("INDEX IS NOT LOADED. This is a map, not the transcript. "
+                    "To get content: `czip ara <id> \"<query>\"` for keyword hits, "
+                    "then `czip aralik <id> <a-b>` for the exact messages. "
+                    "Never dump the whole package. Work from the last messages below."),
+    }
+
+
 # ------------------------------------------------------------- CLI
 def _main(argv):
     """czip komutlari:
@@ -729,9 +804,102 @@ def _main(argv):
         print("Kullanim:\n"
               "  czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]\n"
               "  czip oku <paket.hkp|son>\n"
-              "  czip aralik <paket.hkp|son> <bas-bit>")
+              "  czip aralik <paket.hkp|son> <bas-bit>\n"
+              "  czip birlestir [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
+              "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
+              "  czip gerial [<dosya>]   -> pasife alinan oturumlari geri ac")
         return 0
     emir, kalan = argv[0], argv[1:]
+    if emir == "birlestir":
+        # Ayni isi yapan 2+ oturumu TEK pakette birlestirir (bkz. birlestir.py).
+        # Argumansiz: salt-okunur aday taramasi, hicbir sey yazmaz.
+        import birlestir as _b
+        jev = "--jev" in kalan
+        mod = "eksiksiz" if "--eksiksiz" in kalan else "akilli"
+        gun = 7
+        for a in kalan:
+            if a.startswith("--gun="):
+                try:
+                    gun = max(1, int(a.split("=", 1)[1]))
+                except ValueError:
+                    pass
+        idler = [a for a in kalan if not a.startswith("--") and a != "oto"]
+        oto = "oto" in kalan
+        if len(idler) < 2:
+            _, ciftler = _b.adaylari_bul(gun=gun)
+            if not ciftler:
+                print(f"Son {gun} gunde birlestirilecek benzer oturum yok.")
+                return 0
+            gruplar, iz = _b.gruplari_kur(ciftler, jev=jev)
+            jb = iz.get("jev") or {}
+            print(f"ADAY TARAMASI — son {gun} gun, {len(ciftler)} benzer cift"
+                  + (f"  | Jev: {jb.get('hata') or str(jb.get('cevap')) + ' cevap'}" if jev else ""))
+            for k in iz["kararlar"][:12]:
+                print(f"  {'KABUL' if k['kabul'] else '  red'}  {k['a']} <-> {k['b']}"
+                      f"  {k['kaynak']}={k['skor']:.2f}")
+                print(f"        A: {k['a_ozet']}")
+                print(f"        B: {k['b_ozet']}")
+            if not gruplar:
+                print("\nEsigi gecen grup yok.")
+                return 0
+            print("\nGRUPLAR:")
+            for i, g in enumerate(gruplar, 1):
+                print(f"  {i}) " + "  ".join(g))
+            if not oto:
+                print("\nUygulamak icin: czip birlestir " + " ".join(gruplar[0])
+                      + (" --jev" if jev else ""))
+                return 0
+            idler = gruplar[0]
+            print("\noto: 1. grup birlestiriliyor...")
+        mesajlar, baslik, rapor = _b.oturumlari_birlestir(idler)
+        d = os.path.expanduser(PAKET_DIZIN)
+        os.makedirs(d, exist_ok=True)
+        temiz = re.sub(r"[^A-Za-z0-9-]+", "-", baslik[:48]).strip("-") or "birlesik"
+        yol = os.path.join(d, f"BIRLESIK-{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
+        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
+        kid = id_ata(r["yol"], baslik)
+        print(f"BIRLESTIRILDI: {r['yol']}\n  ID={kid}")
+        for x in rapor["ayrinti"]:
+            print(f"    - {x['sid']}  {x['ilet']} ilet")
+        print(f"  {rapor['kaynak_ilet']} -> {rapor['birlesik_ilet']} ilet"
+              f"  (yinelenen atilan: {rapor['yinelenen_atilan']})")
+        print(f"  {r['kaynak_bayt']}->{r['paket_bayt']}B  oran={r['oran']}x")
+        print(f"  oku: czip oku {kid}")
+        if "--pasif-yok" in kalan or not oto:
+            print("  NOT: kaynak oturumlar state.db'de dokunulmadan duruyor.")
+            if not oto:
+                print("  Kaynaklari pasife de almak icin: czip birlestir oto --jev")
+        else:
+            try:
+                pr = _b.pasife_al(idler, r["yol"], kid, sebep="czip_merge")
+                print(f"  PASIFE ALINDI: {len(pr['pasif'])} oturum kapatildi+arsivlendi")
+                for x in pr["atlanan"]:
+                    print(f"    atlandi: {x['sid']} ({x['neden']})")
+                print(f"  GERI AL: czip gerial {os.path.basename(pr['gerial'])}")
+                print("  (hicbir ileti silinmedi — oturumlar yalnizca listeden gizlendi)")
+            except Exception as _e:
+                print(f"  ! PASIFE ALMA BASARISIZ: {str(_e)[:90]}")
+                print("    Paket URETILDI ama kaynak oturumlar ACIK kaldi — elle kapat.")
+        print("\n  DEVIR TALIMATI (yeni oturumda ilk is):")
+        print(f"    czip oku {kid}  -> kalan acik isi tespit et, kaldigi yerden devam et.")
+        return 0
+    if emir == "gerial":
+        import birlestir as _b
+        if not kalan:
+            d = os.path.expanduser(_b.GERIAL_DIZIN)
+            if not os.path.isdir(d) or not os.listdir(d):
+                print("Geri alinacak kayit yok.")
+                return 0
+            print("Geri alma kayitlari:")
+            for f in sorted(os.listdir(d), reverse=True)[:10]:
+                print("  " + f)
+            print("\nKullanim: czip gerial <dosya>")
+            return 0
+        g = _b.geri_al(kalan[0])
+        print("GERI ALINDI: %d oturum yeniden aktif" % len(g["geri_alinan"]))
+        for x in g["geri_alinan"]:
+            print("  " + x)
+        return 0
     if emir == "paketle":
         if not kalan:
             print("HATA: session_id gerekir (veya 'son' / 'en-uzun')")
@@ -755,8 +923,25 @@ def _main(argv):
         print(f"PAKETLENDI: {r['yol']}\n  ID={kid}\n  ilet={r['mesaj']}  {r['kaynak_bayt']}->{r['paket_bayt']}B"
               f"  oran={r['oran']}x  parca={r['parca']}"
               + (f"  kirpilan_arac={kirp}" if kirp else "")
+              + (f"  tekrar_ayiklandi={r['tekrar']}(-{r['tekrar_bayt']//1024}KB)" if r.get("tekrar") else "")
               + jtxt
               + f"\n  oku: czip oku {kid}   ara: czip ara {kid} \"sorgu\"")
+        # AYNI ISI YAPAN OTURUM UYARISI — paketledikten sonra, karari Jev verir.
+        # --yalniz ile kapatilir (tarama Jev cagrisi yapar, her zaman istenmez).
+        if "--yalniz" not in kalan[1:]:
+            try:
+                import birlestir as _b
+                benzer = [x for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
+                if benzer:
+                    print(f"\n  ! AYNI ISI YAPAN {len(benzer)} OTURUM DAHA VAR"
+                          f" (karar: {benzer[0]['kaynak']}):")
+                    for x in benzer[:5]:
+                        print(f"      {x['sid']}  {x['kaynak']}={x['skor']:.2f}  {x['ozet'][:62]}")
+                    print("    Hepsini TEK pakete almak icin:")
+                    print("      czip birlestir " + sid + " " + " ".join(x["sid"] for x in benzer[:5]) + " --jev")
+                    print("    Birlestirip kaynaklari pasife almak icin:  czip birlestir oto --jev")
+            except Exception as _e:
+                print(f"    (benzer oturum taramasi atlandi: {str(_e)[:70]})")
         return 0
     if emir == "listele":
         kayit = _kayit_oku()
@@ -803,6 +988,43 @@ def _main(argv):
         print("\n=== DURUM ===")
         print(json.dumps(g["durum"], ensure_ascii=False))
         print("\nKURAL: " + g["talimat"])
+        return 0
+    if emir == "harita":
+        # RAG-oncelikli okuma: tam indeks YERINE ince harita (~1.5k token).
+        yol = id_coz(kalan[0]) if kalan else son_paket()
+        if not yol or not os.path.exists(yol):
+            print("HATA: paket bulunamadi:", kalan[0] if kalan else "(son)")
+            return 2
+        h = harita(yol)
+        print("MAP %s | %d msgs | roles=%s | dedup=%d"
+              % (h["baslik"], h["toplam"],
+                 ",".join("%s:%d" % kv for kv in sorted(h["roller"].items())),
+                 h["tekrar_isaretli"]))
+        if h["araclar"]:
+            print("TOOLS " + " ".join("%s:%d" % kv for kv in h["araclar"]))
+        print("REQUESTS %d total, last %d:" % (h["istek_toplam"], len(h["istekler"])))
+        for i, c in h["istekler"]:
+            print("  %d| %s" % (i, c))
+        # TAIL kompakt gosterim: JSON sarmalayicisi (alan adlari, tirnak, kacis)
+        # olculdu -> son iletlerin %47'si sirf tören. Rol tek harfe iner,
+        # icerik duz metin kalir. Okuyan AI icin kayip yok.
+        print("TAIL (%d full, R>=role: U=user A=assistant T=tool S=system):" % len(h["son"]))
+        for it in h["son"]:
+            rol = str(it.get("rol") or it.get("r") or "?")[:1].upper()
+            ic = it.get("icerik")
+            if ic is None:
+                ic = it.get("c") or ""
+            if not isinstance(ic, str):
+                ic = json.dumps(ic, ensure_ascii=False, separators=(",", ":"))
+            ic = " ".join(ic.split())
+            ek = ""
+            tc = it.get("arac") or it.get("tc")
+            if tc:
+                adlar = [x.get("n", "?") if isinstance(x, dict) else str(x) for x in tc] \
+                        if isinstance(tc, list) else [str(tc)]
+                ek = "[" + ",".join(adlar) + "]"
+            print("%s>%s %s" % (rol, ek, ic[:700]))
+        print("HOW " + h["talimat"])
         return 0
     if emir == "aralik":
         if len(kalan) < 2:

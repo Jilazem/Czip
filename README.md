@@ -13,6 +13,62 @@ PAKETLENDI: a37tvc | 1117 ilet | 4,2 MB → 237 KB (18x)
 
 ![kapak](assets/kapak.png)
 
+## v3 — okuma maliyeti (2026-09-20)
+
+Asıl darboğaz sıkıştırma oranı değilmiş: **paket dosyası context'e hiç
+girmiyor**, maliyet yalnızca okuma çıktısı. 3421 iletlik gerçek oturumda
+ölçüldü (`o200k_base`):
+
+| Okuma yolu | Token |
+|---|---|
+| `czip oku` (tam indeks) | 93.417 |
+| `czip harita` (RAG haritası) | **1.561** |
+| + hedefli `czip ara "<sorgu>"` | +634 |
+
+**60× ucuz.** `harita` tam dökümü değil, iş haritasını verir: rol sayıları,
+araç histogramı, kullanıcı istekleri, son iletler ve arama talimatı. Okuyan
+AI sonra yalnızca ihtiyacı olan aralığı `ara` → `aralik` ile çeker.
+
+Ölçülen ama **işe yaramayan** iki fikir (denendi, veriyle elendi):
+
+- **Kodek ayarı.** LZMA2 `pb=0 lc=4 dict=256MB` → yalnızca **%1,2** kazanç.
+  bz2 %27 daha kötü. Mevcut `preset=9|EXTREME` zaten sınırda.
+- **Dil değiştirme.** Aynı talimat: Türkçe 39, İngilizce 34, Çince 35 token.
+  Üstelik talimat metni toplam maliyetin **%0,1'i** — çevirmek anlamsız.
+  Kazanç dilde değil, **JSON töreninde**: son iletleri `A> metin` biçimine
+  çevirmek %47 kazandırdı.
+
+## v3 — tekrar ayıklama
+
+Ölçüm: araç çıktıları paketin **%71'i**, ve bunların **%78'i birebir tekrar**
+(8.571 çıktı → 1.854 benzersiz). İkinci kopyalar `[AYNI-#N]` işaretine çevrildi.
+
+```
+12.217.023 → 479.724 B   (önce 562.416)   oran 21,7x → 25,5x
+```
+
+Beş gerçek oturumda: **39,8 MB → 1,44 MB** (15–35x), 2.590 tekrar ayıklandı.
+
+## v3 — birleştirme (`czip birlestir`)
+
+Aynı işi yapan oturumları tespit edip **tek pakete** alır, istenirse
+kaynakları pasife alır (kapat + arşivle; ileti silinmez, `czip gerial` ile
+geri alınır).
+
+Kararı **Jev** verir ve farkı gerçekten yapar: yerel benzerlik iki ayrı dava
+dosyasını 0,75 ile birleştirmeye kalktı, **Jev 0,13 verip reddetti**; gerçek
+kopyayı 0,97 ile onayladı. Zamanlanmış görev kalıpları ayıklanır (41 yanlış
+eşleşme → 20).
+
+```
+czip birlestir              # salt-okunur aday taraması
+czip birlestir oto --jev    # birleştir + kaynakları pasife al
+czip gerial <dosya>         # geri al
+```
+
+`czip paketle` ayrıca paketledikten sonra "bu işi yapan başka oturum da var"
+uyarısı verir (kararı yine Jev).
+
 ## Rakamlar (gerçek oturumlarda, kanıtlı)
 
 | Oturum | Ham | Paket | Oran |
@@ -117,3 +173,11 @@ python3 tests/test_roundtrip.py   # 4/4: paketle→oku→aralik + istatistik
 ## Lisans
 
 MIT
+
+## Lisans
+
+- **Bireysel / ticari olmayan kullanım: ücretsiz ve özgür.**
+- **Ticari kullanım: ayrı lisans gerektirir.** Ayrıntı: [LICENSE](LICENSE)
+
+2026-09-20 öncesi sürümler MIT altında yayımlanmıştı; o sürümlerin MIT
+hakları saklıdır.

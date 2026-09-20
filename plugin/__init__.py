@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """/czip + /cunzip — oturumu HKP1 paketine sikistir, yeni oturumda paketi ACMADAN oku.
 
-Motor: ayni depodaki hkp.py (saf stdlib, MCP gerektirmez).
+Motor: ~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici/hkp.py (saf stdlib, MCP gerektirmez).
   /czip                 aktif oturumu paketle + sonraki adim komutlarini yazdir
   /czip son             en son aktif oturumu paketle
   /czip <id>            baska oturumu paketle (onek eslesmesi olur)
@@ -18,17 +18,38 @@ import os
 from datetime import datetime
 from typing import Any
 
-_MOTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hkp.py")
+_MOTOR = os.path.expanduser("~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici/hkp.py")
 _SON = {"yol": None}
 
 
-def _motor():
-    spec = importlib.util.spec_from_file_location("hkp_motor", _MOTOR)
+def _motor_dizin():
+    return os.path.dirname(_MOTOR)
+
+
+def _yukle(ad, yol):
+    """Motor dizinini sys.path'e alip modulu yukler (birlestir.py 'import hkp' yapar)."""
+    import sys
+    d = _motor_dizin()
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    if ad in sys.modules:
+        return sys.modules[ad]
+    spec = importlib.util.spec_from_file_location(ad, yol)
     if spec is None or spec.loader is None:
-        raise RuntimeError("hkp motoru bulunamadi: " + _MOTOR)
+        raise RuntimeError("motor bulunamadi: " + yol)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[ad] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _motor():
+    return _yukle("hkp", _MOTOR)
+
+
+def _birlestirici():
+    _motor()  # hkp once yuklensin, birlestir onu import ediyor
+    return _yukle("birlestir", os.path.join(_motor_dizin(), "birlestir.py"))
 
 
 def _aktif_session_id() -> str:
@@ -128,6 +149,121 @@ def _okur(args: str) -> str:
         return "❌ /cunzip hatası: " + str(e)
 
 
+def _birlestir(args: str) -> str:
+    """/cmerge — ayni isi yapan oturumlari tek pakete birlestirir."""
+    try:
+        b = _birlestirici()
+        m = _motor()
+    except Exception as e:
+        return "❌ /cmerge motoru yuklenemedi: " + str(e)
+
+    parca = args.split()
+    jev = "--jev" in parca
+    mod = "eksiksiz" if "--eksiksiz" in parca else "akilli"
+    gun = 7
+    for p in parca:
+        if p.startswith("--gun="):
+            try:
+                gun = max(1, int(p.split("=", 1)[1]))
+            except ValueError:
+                pass
+    idler = [p for p in parca if not p.startswith("--") and p not in ("oto", "bak")]
+    oto = "oto" in parca
+    sadece_bak = "bak" in parca or (not idler and not oto)
+
+    # --- ADAY BULMA / RAPOR MODU -------------------------------------------
+    if sadece_bak or oto:
+        try:
+            _, ciftler = b.adaylari_bul(gun=gun)
+        except Exception as e:
+            return "❌ /cmerge aday taramasi: " + str(e)
+        if not ciftler:
+            return "✅ Son {} gunde birlestirilecek benzer oturum bulunamadi.".format(gun)
+        gruplar, iz = b.gruplari_kur(ciftler, jev=jev)
+        satir = ["🔎 /cmerge aday taramasi — son {} gun, {} benzer cift".format(gun, len(ciftler))]
+        jb = (iz.get("jev") or {})
+        if jev:
+            satir.append("   Jev karar kapisi: " + (
+                "HATA ({}) — yerel benzerlige dusuldu".format(jb.get("hata"))
+                if jb.get("hata") else
+                "{} soru / {} cevap".format(jb.get("soru"), jb.get("cevap"))))
+        satir.append("")
+        for k in iz["kararlar"][:12]:
+            satir.append("   {} {} <-> {}  {}={:.2f}".format(
+                "✅" if k["kabul"] else "⬜",
+                k["a"], k["b"], k["kaynak"], k["skor"]))
+            satir.append("        A: " + k["a_ozet"])
+            satir.append("        B: " + k["b_ozet"])
+        satir.append("")
+        if not gruplar:
+            satir.append("Esigi gecen grup yok — birlestirme yapilmadi.")
+            if not jev:
+                satir.append("Ipucu: --jev ile Jev karar kapisina sordurabilirsin.")
+            return "\n".join(satir)
+        satir.append("BIRLESTIRILEBILIR GRUPLAR:")
+        for i, g in enumerate(gruplar, 1):
+            satir.append("   {}) {}".format(i, "  ".join(g)))
+        if not oto:
+            satir.append("")
+            satir.append("Uygulamak icin:  /cmerge " + " ".join(gruplar[0]) +
+                         (" --jev" if jev else ""))
+            return "\n".join(satir)
+        idler = gruplar[0]
+        satir.append("")
+        satir.append("oto: 1. grup birlestiriliyor...")
+        onsoz = satir
+    else:
+        onsoz = []
+
+    if len(idler) < 2:
+        return ("❌ /cmerge en az 2 oturum ister.\n"
+                "   /cmerge            -> aday tara (degistirmez)\n"
+                "   /cmerge oto --jev  -> en guclu grubu Jev onayiyla birlestir\n"
+                "   /cmerge <id1> <id2> [--jev] [--eksiksiz]")
+
+    # --- BIRLESTIR + PAKETLE ------------------------------------------------
+    try:
+        mesajlar, baslik, rapor = b.oturumlari_birlestir(idler)
+    except Exception as e:
+        return "\n".join(onsoz + ["❌ /cmerge birlestirme hatasi: " + str(e)])
+    if not mesajlar:
+        return "❌ Birlesik oturum bos."
+
+    paket_dizin = os.path.expanduser(m.PAKET_DIZIN)
+    os.makedirs(paket_dizin, exist_ok=True)
+    ad = "BIRLESIK-" + _slug(baslik) + "-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".hkp"
+    yol = os.path.join(paket_dizin, ad)
+    try:
+        r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik, jev=jev)
+    except Exception as e:
+        return "\n".join(onsoz + ["❌ /cmerge sikistirma hatasi: " + str(e)])
+    _SON["yol"] = r["yol"]
+
+    jv = r.get("jev") or {}
+    jtxt = "" if not jv or jv.get("hata") else " | arac budama: sil {} / tut {} / kirp {}".format(
+        jv.get("sil", 0), jv.get("tut", 0), jv.get("kirp", 0))
+    satirlar = onsoz + [
+        "",
+        "🔗 {} oturum TEK pakette birlestirildi: {}".format(rapor["oturum"], baslik),
+    ]
+    for d in rapor["ayrinti"]:
+        satirlar.append("   • {} — {} ilet — {}".format(d["sid"], d["ilet"], (d["baslik"] or "")[:50]))
+    satirlar += [
+        "   {} ilet -> {} ilet (yinelenen atilan: {})".format(
+            rapor["kaynak_ilet"], rapor["birlesik_ilet"], rapor["yinelenen_atilan"]),
+        "   {:,} -> {:,} B ({:.1f}x) | sozluk {} | parca {}{}".format(
+            r["kaynak_bayt"], r["paket_bayt"], r["oran"], r["sozluk"], r["parca"], jtxt),
+        "   paket: " + r["yol"],
+        "",
+        "Sonraki adim — TEK yeni oturumda devam et:",
+        "   /new " + baslik[:55],
+        "   /cunzip " + r["yol"],
+        "",
+        "NOT: kaynak oturumlar state.db'de DOKUNULMADAN duruyor; bu islem salt-okunur.",
+    ]
+    return "\n".join(satirlar)
+
+
 def register(ctx: Any) -> None:
     """Hermes'e /czip ve /cunzip komutlarini kaydeder."""
     ctx.register_command(
@@ -141,4 +277,10 @@ def register(ctx: Any) -> None:
         lambda args="": _okur(args),
         description="Paketi ACAMDAN oku: indeks + son ilet + istenen aralık.",
         args_hint="<paket.hkp> [bas-bit]",
+    )
+    ctx.register_command(
+        "cmerge",
+        lambda args="": _birlestir(args),
+        description="Aynı işi yapan 2+ oturumu TEK .hkp paketinde birleştir (Jev karar kapılı).",
+        args_hint="[bak|oto|<id1> <id2> ...] [--jev] [--eksiksiz] [--gun=7]",
     )

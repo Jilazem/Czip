@@ -1,21 +1,36 @@
-MIT License
+czip / HKP1 — Lisans
+====================
 
-Copyright (c) 2026 czip contributors
+Telif hakkı (c) 2026 Gökhan Uzman
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+BİREYSEL VE TİCARİ OLMAYAN KULLANIM: ÜCRETSİZ
+---------------------------------------------
+Kişisel kullanım, öğrenme, araştırma, öğretim, değerlendirme ve
+ticari olmayan açık kaynak projelerde kullanım için bu yazılımı
+kullanma, kopyalama, değiştirme ve dağıtma izni ücretsiz verilir.
+Tek koşul: bu telif ve lisans bildirimi korunur.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+TİCARİ KULLANIM: AYRI LİSANS GEREKTİRİR
+---------------------------------------
+Bu yazılımın veya türev çalışmalarının ticari faaliyette kullanımı
+-- ürün/hizmet içinde dağıtımı, bir ürünün parçası olarak sunulması,
+ücretli hizmet üretiminde kullanılması dahil -- telif hakkı sahibinden
+ayrı yazılı lisans alınmasını gerektirir.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+İletişim: https://github.com/Jilazem/hermes-czip (issue açın)
+
+GARANTİ YOK
+-----------
+Bu yazılım "OLDUĞU GİBİ", açık veya zımni hiçbir garanti olmaksızın
+sunulur. Telif hakkı sahipleri, yazılımın kullanımından doğan hiçbir
+talep, zarar veya sorumluluktan mesul değildir.
+
+---
+NOT (önceki sürümler): 2026-09-20'den önceki commit'ler MIT lisansı
+altında yayımlanmıştı. MIT geri alınamaz; o sürümleri MIT koşullarıyla
+edinmiş olanların hakları saklıdır. Bu lisans bu tarihten sonraki
+sürümler için geçerlidir.
+
+NOT (standart alternatif): Aynı niyeti standart, hukuken test edilmiş
+bir metinle ifade etmek isterseniz PolyForm Noncommercial License 1.0.0
+uygundur — resmi metin: https://polyformproject.org/licenses/noncommercial/1.0.0/
