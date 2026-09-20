@@ -803,6 +803,8 @@ def _main(argv):
     if not argv or argv[0] in ("-h", "--help", "yardim"):
         print("Kullanim:\n"
               "  czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]\n"
+              "                 [--oto] ayni isi yapanlari da ayni pakete al\n"
+              "                 [--oto-pasif] ayrica kaynaklari kapat+arsivle\n"
               "  czip oku <paket.hkp|son>\n"
               "  czip aralik <paket.hkp|son> <bas-bit>\n"
               "  czip birlestir [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
@@ -907,7 +909,35 @@ def _main(argv):
         sid = kalan[0]
         mod = "eksiksiz" if "--eksiksiz" in kalan[1:] else "akilli"
         jev = "--jev" in kalan[1:]
-        sid, mesajlar, baslik = oturum_oku(sid)
+        # --oto: ayni isi yapan oturumlari SADECE UYARMA, dogrudan ayni pakete al.
+        # Karari Jev verir (Jev yoksa yerel esik). --oto-pasif ayrica kaynaklari
+        # kapatir+arsivler (geri alinabilir: czip gerial).
+        oto = "--oto" in kalan[1:] or "--oto-pasif" in kalan[1:]
+        oto_pasif = "--oto-pasif" in kalan[1:]
+        birlesenler = []
+        if oto:
+            try:
+                import birlestir as _b
+                aday = [x["sid"] for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
+            except Exception as _e:
+                aday = []
+                print("UYARI: oto-birlestirme taramasi basarisiz: %s" % str(_e)[:90])
+            if aday:
+                birlesenler = [sid] + aday
+                print("OTO-BIRLESTIRME: %d oturum tek pakete aliniyor (karar: %s)"
+                      % (len(birlesenler), "jev" if jev else "yerel"))
+                for x in birlesenler:
+                    print("   " + x)
+                sid_asil = sid
+                mesajlar, baslik, rapor = _b.oturumlari_birlestir(birlesenler)
+                sid = sid_asil
+                print("   %d -> %d ilet (yinelenen atilan: %d)"
+                      % (rapor["kaynak_ilet"], rapor["birlesik_ilet"],
+                         rapor["yinelenen_atilan"]))
+            else:
+                print("OTO-BIRLESTIRME: ayni isi yapan baska oturum bulunmadi.")
+        if not birlesenler:
+            sid, mesajlar, baslik = oturum_oku(sid)
         d = os.path.expanduser(PAKET_DIZIN)
         os.makedirs(d, exist_ok=True)
         temiz = re.sub(r"[^A-Za-z0-9-]+", "-", (baslik or sid)[:48]).strip("-") or sid
@@ -928,7 +958,16 @@ def _main(argv):
               + f"\n  oku: czip oku {kid}   ara: czip ara {kid} \"sorgu\"")
         # AYNI ISI YAPAN OTURUM UYARISI — paketledikten sonra, karari Jev verir.
         # --yalniz ile kapatilir (tarama Jev cagrisi yapar, her zaman istenmez).
-        if "--yalniz" not in kalan[1:]:
+        if oto and birlesenler and oto_pasif:
+            try:
+                import birlestir as _b2
+                pr = _b2.pasife_al(birlesenler, r["yol"], kid, sebep="czip_oto_merge")
+                print("  PASIFE ALINDI: %d oturum (geri al: czip gerial %s)"
+                      % (len(pr["pasif"]), os.path.basename(pr["gerial"])))
+            except Exception as _e:
+                print("  ! PASIFE ALMA BASARISIZ: %s" % str(_e)[:110])
+                print("    Paket URETILDI, kaynaklar ACIK kaldi.")
+        if "--yalniz" not in kalan[1:] and not oto:
             try:
                 import birlestir as _b
                 benzer = [x for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
