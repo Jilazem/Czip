@@ -1,183 +1,204 @@
-# czip — oturumunu taşı, bağlamını değil
+# czip — infinite context, without an infinite context window
 
-Uzun bir Hermes sohbetini yeni oturuma taşıdığında tüm geçmiş bağlama
-geri döner; 4 MB'lık oturum = 4 MB'lık token faturası.
-**czip oturumu AI-okur bir pakete (HKP1) sıkıştırır ve yeni oturum o
-paketi asla açmaz** — tek satırlık indeks haritasına bakar, yalnız
-ihtiyacı olan mesaj aralığını okur.
+> 🌍 English (primary) · [Türkçe](README_tr.md)
 
-```
-$ czip paketle son
-PAKETLENDI: a37tvc | 1117 ilet | 4,2 MB → 237 KB (18x)
-```
+When you carry a long agent session into a new chat, the entire history
+reloads into context. A 4 MB session = a 4 MB token bill.
 
-![kapak](assets/kapak.png)
+**czip compresses an agent's full history into a persistent, searchable
+pack (HKP1) — and the new session never unpacks it.** It loads a
+~1,500-token map, then retrieves only the message ranges it actually
+needs.
 
-## v3 — okuma maliyeti (2026-09-20)
+![czip hero](assets/kapak-hero.png)
 
-Asıl darboğaz sıkıştırma oranı değilmiş: **paket dosyası context'e hiç
-girmiyor**, maliyet yalnızca okuma çıktısı. 3421 iletlik gerçek oturumda
-ölçüldü (`o200k_base`):
+## Headline
 
-| Okuma yolu | Token |
+> **93,417 → 1,561 tokens. ~60× lower context-loading cost.**
+> Measured on a real 3,421-message working session (tiktoken `o200k_base`).
+
+czip does **not** make the model's native context window infinite.
+It keeps long history persistent and searchable, and retrieves only the
+relevant parts when needed — *practically unbounded retrievable
+history.*
+
+**Finite context. Persistent memory.**
+
+## v3 — the read cost was the real bottleneck
+
+Compression ratio turned out to be the wrong metric: the pack file never
+enters context at all. The cost is what the reading agent *pulls out*.
+Measured on a real 3,421-message session:
+
+| Read path | Tokens |
 |---|---|
-| `czip oku` (tam indeks) | 93.417 |
-| `czip harita` (RAG haritası) | **1.561** |
-| + hedefli `czip ara "<sorgu>"` | +634 |
+| `czip read` (full index) | 93,417 |
+| `czip map` (RAG map) | **1,561** |
+| + targeted `czip search "<query>"` | +634 |
 
-**60× ucuz.** `harita` tam dökümü değil, iş haritasını verir: rol sayıları,
-araç histogramı, kullanıcı istekleri, son iletler ve arama talimatı. Okuyan
-AI sonra yalnızca ihtiyacı olan aralığı `ara` → `aralik` ile çeker.
+**60× cheaper.** `map` does not dump the transcript — it returns a work
+map: role counts, tool histogram, user requests, recent messages, and a
+search instruction. The reading agent then pulls exact ranges on demand:
+`search` → `range`.
 
-Ölçülen ama **işe yaramayan** iki fikir (denendi, veriyle elendi):
+Two ideas were measured and **rejected with data**:
 
-- **Kodek ayarı.** LZMA2 `pb=0 lc=4 dict=256MB` → yalnızca **%1,2** kazanç.
-  bz2 %27 daha kötü. Mevcut `preset=9|EXTREME` zaten sınırda.
-- **Dil değiştirme.** Aynı talimat: Türkçe 39, İngilizce 34, Çince 35 token.
-  Üstelik talimat metni toplam maliyetin **%0,1'i** — çevirmek anlamsız.
-  Kazanç dilde değil, **JSON töreninde**: son iletleri `A> metin` biçimine
-  çevirmek %47 kazandırdı.
+- **Codec tuning.** LZMA2 `pb=0 lc=4 dict=256MB` gained only **1.2%**.
+  bz2 was 27% worse. The current `preset=9|EXTREME` is already at the
+  limit.
+- **Instruction language.** Same instruction: Turkish 39 tokens, English
+  34, Chinese 35 — and the instruction text is **0.1%** of total cost.
+  The win is not in language, it is in **JSON ceremony**: rendering
+  recent messages as `A> text` instead of JSON objects gained 47%.
 
-## v3 — tekrar ayıklama
+## v3 — duplicate elimination
 
-Ölçüm: araç çıktıları paketin **%71'i**, ve bunların **%78'i birebir tekrar**
-(8.571 çıktı → 1.854 benzersiz). İkinci kopyalar `[AYNI-#N]` işaretine çevrildi.
-
-```
-12.217.023 → 479.724 B   (önce 562.416)   oran 21,7x → 25,5x
-```
-
-Beş gerçek oturumda: **39,8 MB → 1,44 MB** (15–35x), 2.590 tekrar ayıklandı.
-
-## v3 — birleştirme (`czip birlestir`)
-
-Aynı işi yapan oturumları tespit edip **tek pakete** alır, istenirse
-kaynakları pasife alır (kapat + arşivle; ileti silinmez, `czip gerial` ile
-geri alınır).
-
-Kararı **Jev** verir ve farkı gerçekten yapar: yerel benzerlik iki ayrı dava
-dosyasını 0,75 ile birleştirmeye kalktı, **Jev 0,13 verip reddetti**; gerçek
-kopyayı 0,97 ile onayladı. Zamanlanmış görev kalıpları ayıklanır (41 yanlış
-eşleşme → 20).
+Tool outputs are **71%** of a typical pack, and **78% of them are exact
+duplicates** (8,571 outputs → 1,854 unique). Second copies are replaced
+with `[SAME-#N]` markers.
 
 ```
-czip birlestir              # salt-okunur aday taraması
-czip birlestir oto --jev    # birleştir + kaynakları pasife al
-czip gerial <dosya>         # geri al
+12,217,023 → 479,724 B   (previously 562,416)   ratio 21.7x → 25.5x
 ```
 
-`czip paketle` ayrıca paketledikten sonra "bu işi yapan başka oturum da var"
-uyarısı verir (kararı yine Jev).
+Across five real sessions: **39.8 MB → 1.44 MB** (15–35×), 2,590
+duplicates eliminated.
 
-## Rakamlar (gerçek oturumlarda, kanıtlı)
+## v3 — merging (`czip merge`)
 
-| Oturum | Ham | Paket | Oran |
+Detects sessions doing the same job and consolidates them into **one
+pack**; optionally archives the sources (close + archive; messages are
+never deleted, `czip undo` restores them).
+
+The decision is made by **Jev** — and it actually matters: local
+similarity wanted to merge two unrelated case files at 0.75, **Jev
+scored it 0.13 and rejected it**; a true copy was approved at 0.97.
+Scheduled-task boilerplate is filtered out (41 false matches → 20).
+
+```
+czip merge               # read-only candidate scan
+czip merge auto --jev    # merge + archive sources
+czip undo <file>         # restore
+```
+
+`czip pack` also warns after packing when "another session did this job
+too" (the decision again belongs to Jev).
+
+## Numbers (from real sessions, evidence-backed)
+
+| Session | Raw | Pack | Ratio |
 |---|---|---|---|
-| Oyun geliştirme (1117 ilet, 31 uzun araç çıktısı) | 4,27 MB | 237 KB | **18,0x** |
-| Kod / araştırma (210 ilet) | 997 KB | 119 KB | **8,4x** |
-| Yeni oturumun bağlama girişi | 4,27 MB yerine | **~40 KB** indeks + son iletler | |
+| Game dev (1,117 msgs, 31 long tool outputs) | 4.27 MB | 237 KB | **18.0×** |
+| Code / research (210 msgs) | 997 KB | 119 KB | **8.4×** |
+| New session's context entry | instead of 4.27 MB | **~40 KB** index + recent msgs | |
 
-## Neden "paket açılmaz"?
+## Why never unpack?
 
-Geleneksel kompaksiyon ya geçmişin tamamını yeni oturuma yazar (pahalı)
-ya da özetler (bilgi kaybı). czip ikisini de yapmaz: **harita + isteğe
-bağlı aralık** modeliyle yeni oturum 1117 iletin her birini tek satırda
-görür; ayrıntı gereken mesajı numarasından çeker. Sözlük jetonları
-(`␟3␞`) normal metne benzemez — çakışma yok, geri dönüş birebir
-(round-trip testi: 210/210 ilet bit-bit).
+Traditional compaction either rewrites the whole history into the new
+session (expensive) or summarizes it (lossy). czip does neither: with
+the **map + on-demand range** model, the new session sees every one of
+1,117 messages as a single index line and fetches any message by number.
+Dictionary tokens (`␟3␞`) look nothing like natural text — no collision
+risk — and the round-trip is bit-exact (test suite: 210/210 messages,
+bit-for-bit).
 
-## Kurulum
+## Install
 
 ```bash
 git clone https://github.com/Jilazem/hermes-czip && cd hermes-czip
 ./install.sh
 ```
 
-Kurulum: `czip` CLI (`~/.local/bin`) + Hermes plugin'i (`/czip`,
-`/cunzip` slash komutları) + skill köprüsü + 7 araçlık MCP sunucusu.
-Hermes'i yeniden başlattıktan sonra yeni oturumlarda `/czip` gerçek
-slash komut olarak görünür.
+Installs: `czip` CLI (`~/.local/bin`) + Hermes plugin (`/czip`,
+`/cunzip`, `/cmap`, `/csearch` slash commands) + skill bridge + a
+7-tool MCP server. After restarting Hermes, the slash commands appear
+as real commands in new sessions.
 
-## Komutlar
+## Commands
 
-```
-czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]   → paket + 6 haneli ID
-czip oku <id|son>            → PAKETİ AÇMADAN: indeks + son iletler + durum
-czip aralik <id|son> <bas-bit>  → seçili aralık tam metin (jetonlar çözülü)
-czip ara <id|son> "sorgu"    → paket içi arama, ilgili mesaj i'lerini bul
-czip listele                 → kayıtlı paketler: id | tarih | başlık
-```
-
-Yeni oturumda taşıma akışı:
+English aliases work everywhere (`pack` = Turkish `paketle`, etc.);
+Turkish remains the native naming:
 
 ```
-czip oku a37tvc          # harita: hangi mesajda ne var
-czip aralik a37tvc 1040-1060   # sadece gereken kısım
+czip pack <session_id|last|longest> [--full] [--jev]  → pack + 6-char id
+czip read <id|last>           → WITHOUT UNPACKING: index + recent + status
+czip map <id|last>            → RAG map (~1.5k tokens; the cheap read)
+czip search <id|last> "query" → search inside a pack, find message indices
+czip range <id|last> <a-b>    → exact messages, tokens resolved
+czip merge [auto|<id1> <id2>] [--jev] [--days=7]
+czip undo [<file>]            → restore archived sessions
+czip list                     → registered packs: id | date | title
 ```
 
-## Özellikler
+Carry-over flow in a new session:
 
-- **Sözselleştirme** — tekrarlayan bloklar sözlük jetonuna iner, ham
-  tekrar pakete girmez (18x'in sırrı).
-- **Kayıpsız mod** — `--eksiksiz`: her bayt geri döner (8,4x).
-- **Durum tespiti** — `oku` çıktısı `kullanici_yaniti_bekliyor` ve son
-  iletin rolüyle "kaldığın yer"i bildirir; yeni oturum aynı yerden devam eder.
-- **Gizlilik** — `state.db` daima READ-ONLY URI ile okunur; paket
-  yalnızca `~/.hermes/session-packs` içine yazılır, hiçbir yere
-  dışarıya gitmez, silme/bozma yetkisi yoktur.
-- **Opsiyonel Jev kapısı** — `--jev`: 1200 B üstü araç çıktılarının
-  "gerekiyor mu?" kararını harici LLM'e (typesafe.ai System-One) toplu
-  sorar; hata ipucu içeren çıktılar asla sorgulanmaz. **Varsayılan
-  kapalıdır**, örnek içerik dışarı gider — açık bayrak + API anahtarı
-  gerektirir, ağ hatasında sessizce statik davranışa döner.
+```
+czip map a37tvc               # which messages hold what
+czip search a37tvc "edge case"
+czip range a37tvc 1040-1060   # only the part you need
+```
 
-## Bileşenler
+## Features
 
-| Dosya | Rol |
+- **Tokenization** — repeated blocks collapse into dictionary tokens;
+  raw duplication never enters the pack (the secret behind 18×).
+- **Lossless mode** — `--full`: every byte comes back (8.4×).
+- **State detection** — `read` reports `awaiting_user_reply` plus the
+  last message's role, so the new session resumes exactly where the old
+  one stopped.
+- **Privacy** — `state.db` is always opened via a READ-ONLY URI; packs
+  are written only under `~/.hermes/session-packs`; nothing leaves the
+  machine; the engine has no delete/corrupt capability.
+- **Optional Jev gate** — `--jev` asks an external LLM
+  (typesafe.ai System-One) in batches whether tool outputs above
+  1,200 B are needed; outputs containing error hints are never
+  questioned. **Off by default** — it sends sample content out, so it
+  requires an explicit flag + API key, and silently falls back to
+  static behavior on network failure.
+
+## Components
+
+| File | Role |
 |---|---|
-| `hkp.py` | **motor** — saf stdlib (Python 3.9+, 0 bağımlılık): paketle/oku/ara, CLI, state.db RO okuyucu |
-| `czip` | terminal girişi (tek satır sarmalayıcı) |
-| `plugin/` | Hermes plugin'i — `/czip`, `/cunzip` slash komutları |
-| `mcp_server.py` | 7 araçlık MCP sunucusu (sikistir/iceri_ac/kilavuz/mesajlar/...) |
-| `skills/` | skill köprüsü — komut geçmişi eski süreçte bile çalışır |
-| `scripts/kapak.py` | bu README kapağını üreten Pillow betiği |
-| `tests/` | sentetik round-trip + CLI + aralık testleri (4/4) |
+| `hkp.py` | **engine** — pure stdlib (Python 3.9+, 0 deps): pack/read/search, CLI, state.db RO reader |
+| `czip` | terminal entry point (one-line wrapper) |
+| `plugin/` | Hermes plugin — `/czip`, `/cunzip` slash commands |
+| `mcp_server.py` | 7-tool MCP server (compress/open/guide/messages/…) |
+| `skills/` | skill bridge — commands work even in old processes |
+| `scripts/kapak.py` | Pillow script that renders the terminal cover |
+| `tests/` | synthetic round-trip + CLI + range tests (4/4) |
 
 ## Format: HKP1
 
 ```
-"HKP1" | meta_len (4B BE) | veri_len (4B BE) | LZMA-9e(meta) | LZMA-9e(gövde)
+"HKP1" | meta_len (4B BE) | data_len (4B BE) | LZMA-9e(meta) | LZMA-9e(body)
 ```
 
-Meta: başlık, sözlük, sayaçlar, format sürümü, paketleme bilgisi.
-Gövde: mesaj kayıt listesi (rol, içerik, araç çağrıları, reasoning,
-zaman damgası) — jetonlar çözülerek okunur.
+Meta: title, dictionary, counters, format version, packing info.
+Body: message record list (role, content, tool calls, reasoning,
+timestamp) — resolved into readable text on demand.
 
-## Test
+## Tests
 
 ```bash
-python3 tests/test_roundtrip.py   # 4/4: paketle→oku→aralik + istatistik
+python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
 ```
 
-## Sınırlar
+## Limits
 
-- `akilli` mod araç çıktılarını 2000+2000 B baş/son dilimine indirger
-  (bildirilir); birebir arşiv gerekiyorsa `--eksiksiz`.
-- Paket dosyaları düz metin LZMA'dır — şifreleme sağlamaz; hassas
-  içerikli oturum paketlerini disk erişimi olan herkese açık tutma.
-- state.db tablo şeması Hermes sürümüne göre değişebilir; motor
-  PRAGMA ile eksik kolonları otomatik atlar.
-- `--jev` harici servistir (varsayılan kapalı); KVKK/veri politikası
-  gerektiren işlerde kullanma.
+- `smart` mode truncates tool outputs to 2000+2000 B head/tail slices
+  (and reports it); use `--full` for a bit-exact archive.
+- Pack files are plain-text LZMA — no encryption. Do not expose packs
+  from sensitive sessions to anyone with disk access.
+- The `state.db` schema varies with Hermes versions; the engine skips
+  missing columns via PRAGMA.
+- `--jev` is an external service (off by default); avoid it under
+  data-protection policies.
 
-## Lisans
+## License
 
-MIT
+- **Individual / non-commercial use: free and open.**
+- **Commercial use: separate license required.** Details: [LICENSE](LICENSE)
 
-## Lisans
-
-- **Bireysel / ticari olmayan kullanım: ücretsiz ve özgür.**
-- **Ticari kullanım: ayrı lisans gerektirir.** Ayrıntı: [LICENSE](LICENSE)
-
-2026-09-20 öncesi sürümler MIT altında yayımlanmıştı; o sürümlerin MIT
-hakları saklıdır.
+Versions before 2026-09-20 were released under MIT; those versions
+remain MIT-licensed.

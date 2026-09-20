@@ -269,26 +269,26 @@ def register(ctx: Any) -> None:
     ctx.register_command(
         "czip",
         lambda args="": _paketle(args),
-        description="Oturumu .hkp paketine sıkıştır — aynı işi yapanları otomatik birleştirir.",
+        description="Pack the session into a .hkp archive — auto-merges same-job sessions.",
         args_hint="[son|aktif|<id>] [--oto] [--oto-pasif] [--jev] [--eksiksiz]",
     )
     ctx.register_command(
         "cunzip",
         lambda args="": _okur(args),
-        description="Paketi ACAMDAN oku: indeks + son ilet + istenen aralık.",
+        description="Read a pack WITHOUT unpacking: map + last messages + requested range.",
         args_hint="<paket.hkp> [bas-bit]",
     )
     ctx.register_command(
         "czipmerge",
         lambda args="": _birlestir(args),
-        description="Aynı işi yapan 2+ oturumu TEK .hkp paketinde birleştir (Jev karar kapılı).",
+        description="Merge 2+ sessions doing the same job into ONE .hkp pack (gated by a Jev verdict).",
         args_hint="[bak|oto|<id1> <id2> ...] [--jev] [--eksiksiz] [--gun=7]",
     )
     # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
     ctx.register_command(
         "czipex",
         lambda args="": _okur(args),
-        description="Paketi çıkart/oku — RAG yöntemiyle, tam dökümü yüklemeden.",
+        description="Expand/read a pack — via RAG, without loading the full dump.",
         args_hint="<paket.hkp|ID|son> [bas-bit]",
     )
     # cunzip zaten yukarida kayitli; yalniz cmerge'in eski adi koprulenir.
@@ -296,6 +296,6 @@ def register(ctx: Any) -> None:
         ctx.register_command(
             _eski,
             (lambda f: lambda args="": f(args))(_fn),
-            description="(eski ad — czipex/czipmerge kullanın)",
+            description="(legacy alias — use czipex/czipmerge)",
             args_hint=_ip,
         )
