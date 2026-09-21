@@ -129,7 +129,7 @@ def ciz(cikti):
 
     # soltu alt bilgi
     d.line([(bx, 626), (W - 56, 626)], fill=(40, 60, 55))
-    d.text((bx, 644), "github.com/Jilazem/hermes-czip", font=f_oz, fill=YESIL)
+    d.text((bx, 644), "github.com/Jilazem/Czip", font=f_oz, fill=YESIL)
     d.text((bx + 420, 644), "CLI · 7-tool MCP · slash commands", font=f_oz,
            fill=GRIMTI)
 

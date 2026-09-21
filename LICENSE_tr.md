@@ -17,7 +17,7 @@ Bu yazılımın veya türev çalışmalarının ticari faaliyette kullanımı
 ücretli hizmet üretiminde kullanılması dahil -- telif hakkı sahibinden
 ayrı yazılı lisans alınmasını gerektirir.
 
-İletişim: https://github.com/Jilazem/hermes-czip (issue açın)
+İletişim: https://github.com/Jilazem/Czip (issue açın)
 
 GARANTİ YOK
 -----------

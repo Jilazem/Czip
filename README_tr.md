@@ -90,7 +90,7 @@ görür; ayrıntı gereken mesajı numarasından çeker. Sözlük jetonları
 ## Kurulum
 
 ```bash
-git clone https://github.com/Jilazem/hermes-czip && cd hermes-czip
+git clone https://github.com/Jilazem/Czip && cd Czip
 ./install.sh
 ```
 
