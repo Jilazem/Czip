@@ -1,0 +1,17 @@
+{
+  "name": "czip",
+  "description": "Compress a long AI-agent session into a persistent, searchable HKP1 pack. New sessions read a small work-map instead of the full history, then pull only the message ranges they need. Pure Python stdlib, zero deps.",
+  "category": "productivity",
+  "source": {
+    "source": "url",
+    "url": "https://github.com/Jilazem/Czip.git",
+    "sha": "c1b26792a4ba28e140cb0cca2ad5cca15076b1ad"
+  },
+  "homepage": "https://github.com/Jilazem/Czip",
+  "keywords": [
+    "czip",
+    "hkp",
+    "session pack"
+  ],
+  "domains": []
+}
