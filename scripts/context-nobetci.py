@@ -137,6 +137,9 @@ def _kullanim(row):
 
 def _aktifler(con):
     con.row_factory = sqlite3.Row
+    # HAYALET KORUMASI (2026-09-21): mesajlari gece temizligince silinmis ama
+    # sessions satiri ACIK kalmis oturumlar secilirse teklif uretilir, paketleme
+    # 'eslesme yok'la patlar. Mesaji olmayan oturuma teklif YAZILMAZ.
     return con.execute(
         """SELECT s.id, s.model, s.model_config, s.chat_id, s.thread_id,
                   s.session_key, s.title, s.display_name, s.started_at
@@ -146,6 +149,7 @@ def _aktifler(con):
              AND s.chat_id IS NOT NULL
              AND s.started_at > ?
              AND (s.last_activity_at IS NULL OR s.last_activity_at > ?)
+             AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id)
            ORDER BY s.started_at DESC""",
         (_simdi() - 7 * 86400, _simdi() - 2 * 86400)).fetchall()
 
