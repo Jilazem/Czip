@@ -907,6 +907,7 @@ def _main(argv):
               "  czip hatirla \"istek\"   -> bu istekle ilgili gecmis is (RAG, alaka kapili)\n"
               "  czip temizle [--uygula] [geri [ZAMAN]] -> haftalik temizlik (varsayilan: sadece plan)\n"
               "  czip hook <Olay>        -> Claude Code hook girisi (stdin JSON)\n"
+              "  czip auto64 | auto128 | auto<N> | auto off -> her N bin tokende otomatik paketle\n"
               "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
               "  czip ayar [esik 50|kademe 50,75,90|oto on]  -> thresholds & auto mode\n"
               "  czip index [--full]     -> build the searchable store over all packages\n"
@@ -920,6 +921,38 @@ def _main(argv):
     # English is the primary CLI; the original Turkish verbs keep working.
     emir = _ALIAS.get(emir, emir)
     # /czip_50 , /czip_%75 , czip 50%  -> shorthand for "ayar esik <n>"
+    _auto = re.fullmatch(r"(?:czip[-_]?)?auto[-_]?(\d{1,4})k?", emir)
+    if _auto:
+        # czip auto64 / auto128 / czip-auto256: N bin tokende bir kendiliginden paketle
+        import ayar as _a
+        try:
+            a = _a.auto_kur(int(_auto.group(1)))
+        except ValueError as e:
+            print("HATA:", e)
+            return 2
+        k = a["adim_token"] // 1000
+        print(T("czip-auto%d ON: packs automatically at every %dk tokens of context "
+                "(%dk, %dk, %dk ...). Off: czip auto off",
+                "czip-auto%d ACIK: baglam her %dk token buyudukce kendiliginden paketler "
+                "(%dk, %dk, %dk ...). Kapat: czip auto off") % (k, k, k, 2 * k, 3 * k))
+        return 0
+    if emir in ("auto", "oto") and kalan and kalan[0].lower() in ("off", "kapat", "0"):
+        import ayar as _a
+        _a.auto_kur(0)
+        _a.yaz(oto=False)
+        print(T("auto mode off — back to percentage tiers (%s)",
+                "oto mod kapali — yuzde kademelerine donuldu (%s)")
+              % ", ".join("%%%d" % round(x * 100) for x in _a.oku()["kademeler"]))
+        return 0
+    if emir in ("auto", "oto") and not kalan:
+        import ayar as _a
+        a = _a.oku()
+        print(T("auto mode: ", "oto mod: ") + (
+            "czip-auto%d" % (a["adim_token"] // 1000) if a.get("adim_token") else
+            T("off (percentage tiers)", "kapali (yuzde kademeleri)")))
+        print(T("presets: ", "hazir: ") + "  ".join("czip auto%d" % k for k in _a.AUTO_HAZIR)
+              + T("   any N works: czip auto96", "   her N olur: czip auto96"))
+        return 0
     _m = re.fullmatch(r"%?(\d{1,3})%?", emir)
     if _m:
         kalan = ["esik", _m.group(1)] + list(kalan)
@@ -1188,6 +1221,8 @@ def _main(argv):
             for ad in ("koruma", "hatirlatma", "brifing", "haftalik_temizlik", "hook_laya"):
                 print("    %-17s: %s" % (ad, "ON" if a.get(ad) else "off"))
             print("    claude_ctx       : %d" % a.get("claude_ctx", 200000))
+            print("    auto (adim)      : " + ("czip-auto%d" % (a["adim_token"] // 1000)
+                                               if a.get("adim_token") else "off"))
             return 0
         anahtar = kalan[0].lower()
         deger = kalan[1] if len(kalan) > 1 else ""

@@ -61,6 +61,8 @@ Jev bulut kapısı 21.09'da gizlilik gerekçesiyle kapatıldı. Yerine YEREL mot
 - `[CZIP HATIRLATMA]`: bu istekle ilgili geçmiş iş; önemliyse tekrar yapmadan
   önce `czip aralik <id> <i>` ile oku.
 - `[CZIP BAGLANTISI]` (sıkıştırma sonrası): özette eksik kalan pakette — tahmin etme.
+- `[CZIP-AUTO64]` (czip auto64/auto128 modu): o ana kadarki her şey pakette;
+  bağlamı şişirme, ayrıntıyı pakette ara. Ayar: `czip auto64` · `/czipauto 64` · `czip auto off`.
 - Haftalık temizlik kendiliğinden çalışır: `czip temizle` (plan), `czip temizle geri`.
 
 ## Kurallar

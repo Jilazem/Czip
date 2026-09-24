@@ -195,6 +195,7 @@ def session_start(o):
             parca.append(b)
     if kaynak in ("compact", "clear"):
         d["kademeler"] = []  # baglam kuculdu: koruma yeniden devreye girebilir
+        d["auto_seviye"] = 0
         _durum_yaz(sid, d)
     parca.extend(_bakim(a))
     return "\n\n".join(parca)
@@ -207,7 +208,9 @@ def user_prompt(o):
     d = _durum_oku(sid)
     parca = []
     # 1) BAGLAM KORUMA
-    if a.get("koruma", True) and tr:
+    if a.get("koruma", True) and tr and int(a.get("adim_token") or 0) > 0:
+        parca.extend(_auto_adim(o, a, d, tr))
+    elif a.get("koruma", True) and tr:
         token, kaynak = baglam_olc(tr)
         ctx = _pencere(token, a)
         oran = token / float(ctx) if ctx else 0
@@ -251,6 +254,40 @@ def user_prompt(o):
                                ["%s#%s" % (h["path"], h["i"]) for h in isabet])[-200:]
     _durum_yaz(sid, d)
     return "\n\n".join(parca)
+
+
+def _auto_adim(o, a, d, tr):
+    """czip-autoN: baglam her N bin token buyudukce kayipsiz paketle.
+
+    Seviye = token // adim. Seviye artinca (64k, 128k, 192k ...) bir kez paketler;
+    /compact ya da /clear sonrasi seviye sifirlanir (SessionStart)."""
+    import ayar
+    sid, cwd = o.get("session_id") or "?", o.get("cwd")
+    token, kaynak = baglam_olc(tr)
+    seviye = ayar.auto_seviye(token, a)
+    if seviye <= int(d.get("auto_seviye") or 0):
+        return []
+    adim_k = int(a["adim_token"]) // 1000
+    try:
+        kid, yol = transcript_paketle(tr, sid, cwd, "auto%d-%d" % (adim_k, seviye))
+    except Exception as e:  # noqa: BLE001
+        kid, yol = None, None
+        _log("auto/paketle: %s" % e)
+    d["auto_seviye"] = seviye
+    if kid:
+        d.setdefault("paketler", []).append(kid)
+        d.setdefault("paket_yollari", []).append(yol)
+    ctx = _pencere(token, a)
+    t = ("[CZIP-AUTO%d] Baglam %dk token'i gecti (%dk, %s). " %
+         (adim_k, seviye * adim_k, token // 1000, kaynak))
+    if kid:
+        t += "Oturum kayipsiz paketlendi: ID %s. " % kid
+    t += ('Bu noktaya kadarki her ayrinti pakette: gerekirse czip ara %s "..." / '
+          "czip aralik %s <i>. Baglami sisirme (grep / offset+limit, head/tail)." %
+          (kid or "<id>", kid or "<id>"))
+    if token >= 0.75 * ctx:
+        t += " Pencere doluyor (%%%d): alt is bitince kullaniciya /compact oner." % round(100.0 * token / ctx)
+    return [t]
 
 
 def pre_compact(o):

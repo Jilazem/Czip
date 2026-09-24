@@ -280,6 +280,37 @@ def _birlestir(args: str) -> str:
     return "\n".join(satirlar)
 
 
+def _auto(args: str) -> str:
+    """/czipauto 64 | 128 | <N> | off — N bin tokende bir kendiliginden paketle."""
+    import sys
+    d = _motor_dizin()
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    try:
+        a = _yukle("ayar", os.path.join(d, "ayar.py"))
+    except Exception as e:
+        return "❌ /czipauto: ayar modulu yuklenemedi: " + str(e)
+    import re as _re
+    arg = _re.sub(r"^(czip[-_]?)?auto[-_]?", "", (args or "").strip().lower())
+    arg = _re.sub(r"(?<=\d)k$", "", arg)
+    if arg in ("", "?"):
+        mevcut = a.oku().get("adim_token") or 0
+        return ("⚙️ czip-auto: " + ("czip-auto%d acik" % (mevcut // 1000) if mevcut else "kapali")
+                + "\nKullanim: /czipauto 64 · /czipauto 128 · /czipauto 32 · /czipauto off")
+    if arg in ("off", "kapat", "0"):
+        a.yaz(adim_token=0, mutlak_token=0, oto=False)
+        return "⏹ czip-auto kapatildi — yuzde kademelerine donuldu."
+    try:
+        k = int(arg)
+    except ValueError:
+        return "❌ /czipauto: sayi ver (64, 128 ...) ya da off"
+    if not 8 <= k <= 2000:
+        return "❌ /czipauto: aralik 8..2000 (bin token)"
+    a.yaz(adim_token=k * 1000, mutlak_token=k * 1000, oto=True)
+    return ("✅ czip-auto%d acik: baglam her %dk token buyudukce oturum sormadan "
+            "paketlenir (%dk, %dk, %dk ...)." % (k, k, k, 2 * k, 3 * k))
+
+
 def register(ctx: Any) -> None:
     """Hermes'e /czip ve /cunzip komutlarini kaydeder."""
     ctx.register_command(
@@ -301,6 +332,12 @@ def register(ctx: Any) -> None:
         args_hint="[bak|oto|<id1> <id2> ...] [--laya] [--eksiksiz] [--gun=7]",
     )
     # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
+    ctx.register_command(
+        "czipauto",
+        lambda args="": _auto(args),
+        description="Auto-pack every N thousand tokens of context: /czipauto 64 | 128 | off.",
+        args_hint="[32|64|128|256|<N>|off]",
+    )
     ctx.register_command(
         "czipex",
         lambda args="": _okur(args),

@@ -168,6 +168,14 @@ folder, never deleting directly:
   over 2 MB trimmed to the last 512 KB.
 - Trash is emptied after 30 days; `czip temizle geri` restores the last run.
 
+**Auto-pack presets — `czip auto64`, `czip auto128`** (also `auto32`,
+`auto256`, any `autoN`): instead of percentages, pack every N thousand
+tokens of context — 64k, 128k, 192k … Each step packs once, losslessly;
+`/compact` resets the counter. Same setting drives Hermes (`/czipauto 64`,
+packs without asking). `czip auto off` returns to percentage tiers.
+Note: a hook cannot run `/compact` itself — czip packs and tells the model
+to suggest it; Claude Code's own auto-compact still applies.
+
 All of it is switchable: `czip settings guard|recall|brief|cleanup on|off`,
 `czip settings ctx 1000000` for 1M-context models.
 

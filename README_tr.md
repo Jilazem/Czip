@@ -151,6 +151,14 @@ taşır, asla doğrudan silmez:
   `buyuk_log` — 2 MB üstü log son 512 KB'a iner.
 - Çöp 30 gün sonra boşaltılır; `czip temizle geri` son temizliği geri alır.
 
+**Hazır oto-paket modları — `czip auto64`, `czip auto128`** (ayrıca `auto32`,
+`auto256`, istediğin `autoN`): yüzde yerine bağlam her N bin token büyüdükçe
+paketler — 64k, 128k, 192k … Her adım bir kez, kayıpsız; `/compact` sayacı
+sıfırlar. Aynı ayar Hermes'i de yönetir (`/czipauto 64`, sormadan paketler).
+`czip auto off` yüzde kademelerine döner. Not: hook `/compact`'ı kendisi
+çalıştıramaz — czip paketler ve modele önermesini söyler; Claude Code'un
+kendi otomatik sıkıştırması da geçerli kalır.
+
 Hepsi açılıp kapatılabilir: `czip ayar koruma|hatirlatma|brifing|haftalik_temizlik on|off`,
 1M bağlamlı modeller için `czip ayar ctx 1000000`.
 

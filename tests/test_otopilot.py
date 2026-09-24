@@ -167,6 +167,28 @@ class TestHook(unittest.TestCase):
         self.assertEqual(self._cagir("UserPromptSubmit", prompt="devam et lutfen simdi"), "")
         self.assertEqual(len(claude_hook._durum_oku("s1")["paketler"]), 1)
 
+    def test_auto64_adim_modu(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(hkp._main(["auto64"]), 0)
+        a = ayar.oku()
+        self.assertEqual((a["adim_token"], a["mutlak_token"], a["oto"]), (64000, 64000, True))
+        self.assertEqual(ayar.auto_seviye(151_017, a), 2)
+        t = self._cagir("UserPromptSubmit", prompt="devam et lutfen simdi")
+        self.assertIn("[CZIP-AUTO64]", t)
+        self.assertIn("128k", t)                                # 2. adim: 128k gecildi
+        self.assertEqual(self._cagir("UserPromptSubmit", prompt="devam et lutfen"), "")
+        self._cagir("SessionStart", source="compact")          # sayac sifirlanir
+        self.assertIn("[CZIP-AUTO64]", self._cagir("UserPromptSubmit", prompt="devam et lutfen"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(hkp._main(["czip-auto128"]), 0)
+            self.assertEqual(ayar.oku()["adim_token"], 128000)
+            self.assertEqual(hkp._main(["auto", "off"]), 0)
+            self.assertEqual(hkp._main(["auto5"]), 2)          # aralik disi
+        self.assertEqual(ayar.oku()["adim_token"], 0)
+        self.assertFalse(ayar.oku()["oto"])
+
     def test_esik_altinda_sessiz(self):
         ayar.yaz(claude_ctx=200_000, kademeler=[0.9], esik_oran=0.9, kalan_token=0)
         self.assertEqual(self._cagir("UserPromptSubmit", prompt="devam et lutfen"), "")

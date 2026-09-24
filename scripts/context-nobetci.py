@@ -247,8 +247,13 @@ def main(argv):
             continue
         son = durum.get(sid) or {}
         gecen_sa = (_simdi() - float(son.get("zaman", 0))) / 3600.0
+        adim = int(AYAR.get("adim_token") or 0)
         if not test_sid:
-            if gecen_sa < TEKRAR_SURESI_SA and deger - float(son.get("deger", 0)) < ARTIS_GEREK:
+            if adim > 0:
+                # czip-autoN: her N bin tokenlik adimda bir kez (64k, 128k, 192k ...)
+                if deger // adim <= int(float(son.get("deger", 0)) // adim):
+                    continue
+            elif gecen_sa < TEKRAR_SURESI_SA and deger - float(son.get("deger", 0)) < ARTIS_GEREK:
                 continue  # yakın zamanda uyarıldı, yeter
         gecilen = [k for k in KADEMELER if oran >= k]
         kademe = gecilen[-1] if gecilen else None

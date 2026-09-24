@@ -79,6 +79,8 @@ Packs live in: `~/.hermes/session-packs/*.hkp`
   read the exact message with `czip aralik <id> <i>` before redoing work.
 - `[CZIP BAGLANTISI]` after compaction: details the summary lost are in the
   named pack — look them up instead of guessing.
+- `[CZIP-AUTO64]` (step mode, `czip auto64` / `auto128`): everything up to
+  this point is packed; keep context lean and look details up in the pack.
 - Weekly cleanup runs itself; to check: `czip temizle` (plan only),
   undo: `czip temizle geri`.
 

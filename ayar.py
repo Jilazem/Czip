@@ -13,6 +13,8 @@ their behaviour.
                 (%90 of 262k leaves 26k = under one heavy turn). 0 disables it.
   mutlak_token: fire when measured prompt tokens reach this absolute count,
                 whichever of the three comes first. 0 disables it.
+  adim_token  : step mode (`czip auto64`): pack again every time usage grows
+                by this many tokens (64k, 128k, 192k ...). 0 = tier mode.
   kademeler   : escalating tiers; each fires once per session
   oto         : true  -> do not ask, decide and pack automatically
                 false -> write the offer, let the user press the button
@@ -49,6 +51,7 @@ VARSAYILAN = {
     "esik_oran": 0.50,
     "kalan_token": 70000,
     "mutlak_token": 0,
+    "adim_token": 0,
     "kademeler": [0.50, 0.75, 0.90],
     "oto": False,
     "oto_pasif": False,
@@ -97,6 +100,7 @@ def oku():
             pass
     _int_env(a, "kalan_token", "CZIP_KALAN_TOKEN")
     _int_env(a, "mutlak_token", "CZIP_MUTLAK_TOKEN")
+    _int_env(a, "adim_token", "CZIP_ADIM_TOKEN")
     if os.environ.get("CZIP_OTO"):
         a["oto"] = os.environ["CZIP_OTO"].strip() not in ("0", "false", "hayir", "no")
     if os.environ.get("CZIP_BULUT_YEDEGI"):
@@ -139,6 +143,28 @@ def esik_token(ctx, a=None):
     if mutlak > 0:
         esik = min(esik, mutlak)
     return esik
+
+
+AUTO_HAZIR = (32, 64, 128, 256)  # czip auto32 / auto64 / auto128 / auto256
+
+
+def auto_kur(k):
+    """`czip autoN`: N bin tokende bir kendiliginden paketle (adim modu).
+
+    k=0 -> adim modunu kapat, yuzde kademelerine don. Doner: yazilan ayar."""
+    k = int(k)
+    if k <= 0:
+        return yaz(adim_token=0, mutlak_token=0)
+    if not 8 <= k <= 2000:
+        raise ValueError("auto araligi 8..2000 (bin token)")
+    return yaz(adim_token=k * 1000, mutlak_token=k * 1000, oto=True)
+
+
+def auto_seviye(token, a=None):
+    """Adim modunda kullanimin gectigi adim sayisi (64k adimla 130k -> 2). Kapaliysa 0."""
+    a = a or oku()
+    adim = int(a.get("adim_token") or 0)
+    return int(token) // adim if adim > 0 else 0
 
 
 def kademe_bul(oran, kademeler=None):
