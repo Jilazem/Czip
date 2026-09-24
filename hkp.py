@@ -1476,6 +1476,9 @@ def _main(argv):
         return 0
     if emir == "temizle":
         import temizlik as _t
+        # English aliases: --apply / --quiet / undo|restore
+        kalan = [{"--apply": "--uygula", "--quiet": "--sessiz", "undo": "geri",
+                  "restore": "geri"}.get(x, x) for x in kalan]
         if kalan and kalan[0] == "geri":
             n = _t.geri_al(kalan[1] if len(kalan) > 1 else None)
             print(T("restored %d items", "%d oge geri yuklendi") % n)

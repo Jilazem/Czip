@@ -9,7 +9,8 @@ gönderilmedi; gönderimler kullanıcı onayına tabidir.
 
 | Yol | Ne için |
 |---|---|
-| `.claude-plugin/plugin.json` | Claude Code plugin manifesti (Grok Build bunu da kabul eder) |
+| `.claude-plugin/plugin.json` | Claude Code plugin manifesti (Grok Build bunu da kabul eder); `mcpServers` burada |
+| `hooks/hooks.json` | Claude Code plugin otopilotu (brifing, bağlam koruma, RAG hatırlatma, compaction öncesi paket) |
 | `.grok-plugin/marketplace.json` | Grok Build `xai-org/plugin-marketplace` PR girdi taslağı |
 | `skills/czip-session-pack/` | Bağımsız İngilizce beceri (CLAWHub/Codex/通用) |
 | `skills/czip-oturum-paketle/` | Orijinal Türkçe beceri (dokunulmadı) |

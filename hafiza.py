@@ -79,8 +79,8 @@ def gunluk(proje=None, cwd=None, n=5):
                 o = json.loads(s)
             except ValueError:
                 continue
-            if cwd and o.get("cwd") and os.path.normpath(o["cwd"]) != os.path.normpath(cwd):
-                continue
+            if cwd and os.path.normpath(o.get("cwd") or "") != os.path.normpath(cwd):
+                continue  # cwd'siz (Hermes) kayit baska projenin brifingine sizmasin
             if proje and not cwd and o.get("proje") != proje:
                 continue
             if o.get("yol") and not os.path.exists(o["yol"]):

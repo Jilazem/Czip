@@ -115,6 +115,7 @@ class TestHafiza(unittest.TestCase):
         self._paketle(_konusma(), "cc:1")
         kid2, _ = self._paketle(_konusma(4), "cc:1")      # ayni oturum, yeni paket
         self._paketle(_konusma(), "cc:2", cwd="/baska")
+        self._paketle(_konusma(), "hermes-1", cwd=None)   # cwd'siz: sizmamali
         g = hafiza.gunluk(cwd="/p/imar")
         self.assertEqual([o["kid"] for o in g], [kid2])   # oturum basina en yeni
         b = hafiza.brifing(cwd="/p/imar")
@@ -236,6 +237,17 @@ class TestTemizlik(unittest.TestCase):
         self._paket([{"role": "user", "content": "bambaska bir is"}] * 3, "b1", "cc:z", yas=3)
         self._paket(_konusma(3), "b2", "cc:z", yas=2)
         self.assertEqual(temizlik.plan(), [])
+
+    def test_ingilizce_bayraklar(self):
+        import contextlib
+        import io
+        kid1, y1 = self._paket(_konusma(2), "c1", "cc:q", yas=3)
+        self._paket(_konusma(3), "c2", "cc:q", yas=2)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(hkp._main(["clean", "--apply", "--quiet"]), 0)
+            self.assertFalse(os.path.exists(y1))
+            self.assertEqual(hkp._main(["clean", "undo"]), 0)
+        self.assertTrue(os.path.exists(y1))
 
     def test_hayalet_yedek_ve_cop_bosaltma(self):
         _, y = self._paket([{"role": "user", "content": "x"}], "h", "cc:h", yas=10)
