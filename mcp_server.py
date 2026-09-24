@@ -447,6 +447,14 @@ def temizlik(uygula: bool = False) -> str:
         return hkp.hata(e)
 
 
+@mcp.tool()
+def czip_yardim(konu: str = "") -> str:
+    """czip-help: tum komutlar gruplu ve tanimlariyla. konu: paket | hafiza | auto |
+    temizlik | claude | karar | hermes | mesaj ya da bir komut parcasi (ornek 'auto64')."""
+    import yardim
+    return yardim.metin(konu or None, dil="tr")
+
+
 async def _run(name: str, **kw):
     """Async kuyruk yolu (plugin) — ayni islevler, await edilebilir sarmalayici."""
     import anyio.to_thread

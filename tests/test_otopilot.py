@@ -317,3 +317,36 @@ class TestMiniMcp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestYardim(unittest.TestCase):
+
+    def test_her_cli_komutu_yardimda(self):
+        """hkp.py'deki her `emir == "x"` dali czip-help'te (TR adi ya da EN takma adi) gecmeli."""
+        import re
+        import yardim
+        with open(os.path.join(KOK, "hkp.py"), encoding="utf-8") as f:
+            kod = f.read()
+        emirler = set(re.findall(r'emir == "(\w+)"', kod)) - {"yardim", "hook"}
+        ters = {}
+        for en, tr in hkp._ALIAS.items():
+            ters.setdefault(tr, set()).add(en)
+        metin = " ".join(yardim.komutlar()) + " czip hook"
+        def var(ad):
+            return re.search(r"czip %s(?![\w-])" % re.escape(ad), metin) is not None
+
+        eksik = [e for e in emirler if not var(e) and not any(var(en) for en in ters.get(e, ()))]
+        self.assertEqual(eksik, [], "czip-help'te tanimi olmayan komut(lar)")
+
+    def test_help_girisleri_ve_konu(self):
+        import contextlib
+        import io
+        for arg in (["help"], ["-h"], ["czip-help"], ["yardim"], ["help", "auto"]):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(hkp._main(arg), 0)
+            self.assertIn("czip-help", buf.getvalue())
+        import yardim
+        self.assertIn("czip auto64", yardim.metin("auto"))
+        self.assertNotIn("czip merge", yardim.metin("auto"))
+        self.assertIn("Konu bulunamadi", yardim.metin("xyz", dil="tr"))

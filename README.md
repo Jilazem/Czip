@@ -221,6 +221,10 @@ For Claude Desktop / Claude Code:
 
 ## Commands
 
+`czip help` (also `czip-help`, Hermes `/czip_help`, MCP `czip_yardim`) prints
+every command grouped with a one-paragraph definition; `czip help auto`
+shows one topic, `CZIP_LANG=tr` prints it in Turkish.
+
 English aliases work everywhere (`pack` = Turkish `paketle`, etc.);
 Turkish remains the native naming:
 

@@ -311,6 +311,22 @@ def _auto(args: str) -> str:
             "paketlenir (%dk, %dk, %dk ...)." % (k, k, k, 2 * k, 3 * k))
 
 
+def _yardim(args: str) -> str:
+    """/czip_help [konu] — tum komutlar ve tanimlari (tek kaynak: yardim.py)."""
+    import sys
+    for d in (os.path.dirname(os.path.dirname(os.path.abspath(__file__))), _motor_dizin()):
+        y = os.path.join(d, "yardim.py")
+        if os.path.isfile(y):
+            if d not in sys.path:
+                sys.path.insert(0, d)
+            try:
+                return _yukle("yardim", y).metin((args or "").strip() or None, dil="tr")
+            except Exception as e:
+                return "❌ /czip_help: " + str(e)
+    return ("czip komutlari: /czip · /czipex · /czipmerge · /czipauto 64|128|off\n"
+            "(tam liste icin yardim.py motor dizininde olmali)")
+
+
 def register(ctx: Any) -> None:
     """Hermes'e /czip ve /cunzip komutlarini kaydeder."""
     ctx.register_command(
@@ -332,6 +348,13 @@ def register(ctx: Any) -> None:
         args_hint="[bak|oto|<id1> <id2> ...] [--laya] [--eksiksiz] [--gun=7]",
     )
     # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
+    for _ad in ("czip_help", "czihelp"):
+        ctx.register_command(
+            _ad,
+            lambda args="": _yardim(args),
+            description="czip help: every command with its description (topic optional).",
+            args_hint="[paket|hafiza|auto|temizlik|claude|karar|hermes|mesaj]",
+        )
     ctx.register_command(
         "czipauto",
         lambda args="": _auto(args),

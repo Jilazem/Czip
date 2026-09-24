@@ -890,29 +890,9 @@ def _main(argv):
     --laya (eski: --jev): akilli modda buyuk arac ciktilarini karar kapisina
     (yerel Laya; bkz. karar.py) sor; oluler paketten cikar.
     """
-    if not argv or argv[0] in ("-h", "--help", "yardim"):
-        print("Kullanim:\n"
-              "  czip paketle <session_id|son|en-uzun|DOSYA|cc:son|cc:<uuid>> [--eksiksiz] [--laya]\n"
-              "                 [--oto] ayni isi yapanlari da ayni pakete al\n"
-              "                 [--oto-pasif] ayrica kaynaklari kapat+arsivle\n"
-              "  czip oku <paket.hkp|son>\n"
-              "  czip aralik <paket.hkp|son> <bas-bit>\n"
-              "  czip birlestir [oto|<id1> <id2> ...] [--laya] [--gun=7] [--pasif-yok]\n"
-              "  czip cevre <id|son> <i> [--n=3] -> i'nin cevresi (i-n..i+n tam metin)\n"
-              "  czip cc [--n=10]        -> Claude Code/Desktop oturumlari (cc:<uuid> ile paketle)\n"
-              "  --laya: karar kapisi (yerel Laya; eski ad --jev). Motor: czip ayar motor laya|jev\n"
-              "  czip yon <id|son>       -> yon karti: hedef, kararlar, acik isler, SONRAKI ADIM\n"
-              "  czip gunluk [--n=10]    -> ne yaptim? paket gunlugu (proje bazli)\n"
-              "  czip brifing [--cwd=DIR]-> acilis brifingi (hook'un verdigi metin)\n"
-              "  czip hatirla \"istek\"   -> bu istekle ilgili gecmis is (RAG, alaka kapili)\n"
-              "  czip temizle [--uygula] [geri [ZAMAN]] -> haftalik temizlik (varsayilan: sadece plan)\n"
-              "  czip hook <Olay>        -> Claude Code hook girisi (stdin JSON)\n"
-              "  czip auto64 | auto128 | auto<N> | auto off -> her N bin tokende otomatik paketle\n"
-              "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
-              "  czip ayar [esik 50|kademe 50,75,90|oto on]  -> thresholds & auto mode\n"
-              "  czip index [--full]     -> build the searchable store over all packages\n"
-              "  czip asearch \"<query>\"   -> search the whole archive (long-term memory)\n"
-              "  czip gerial [<dosya>]   -> pasife alinan oturumlari geri ac")
+    if not argv or argv[0] in ("-h", "--help", "help", "yardim", "czip-help", "czip_help"):
+        import yardim as _y
+        print(_y.metin(argv[1] if len(argv) > 1 else None))
         return 0
     emir, kalan = argv[0], argv[1:]
     # Karar kapisi bayragi: --laya (yerel, varsayilan motor) / --karar; eski --jev

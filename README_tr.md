@@ -203,6 +203,10 @@ Claude Desktop / Claude Code için:
 
 ## Komutlar
 
+`czip help` (ayrıca `czip-help`, Hermes'te `/czip_help`, MCP'de `czip_yardim`)
+tüm komutları gruplu ve tanımlarıyla listeler; `czip help auto` tek konu
+gösterir, `CZIP_LANG=tr` Türkçe basar.
+
 ```
 czip paketle <session_id|son|en-uzun|DOSYA|cc:son> [--eksiksiz] [--laya]   → paket + 6 haneli ID
 czip oku <id|son>            → PAKETİ AÇMADAN: indeks + son iletler + durum
