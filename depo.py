@@ -85,15 +85,29 @@ def _kid_haritasi():
     return out
 
 
-def guncelle(tam=False, ilerleme=None):
-    """Index new/changed packages. Returns a summary dict."""
+def guncelle(tam=False, ilerleme=None, butce_sn=None):
+    """Index new/changed packages. Returns a summary dict.
+
+    butce_sn: stop after this many seconds (hooks must stay fast); the rest is
+    picked up by the next call because unchanged packages are skipped.
+    Packages that no longer exist (cleanup moved them) are dropped from the index."""
+    t0 = time.time()
     con = _ac()
     kidler = _kid_haritasi()
     mevcut = {r[0]: (r[1], r[2]) for r in
               con.execute("SELECT path, mtime, size FROM packages")}
-    yeni = guncellenen = atlanan = ileti = 0
+    yeni = guncellenen = atlanan = ileti = silinen = 0
+    kesildi = False
     try:
+        for p in list(mevcut):
+            if not os.path.exists(p):
+                con.execute("DELETE FROM mfts WHERE path = ?", (p,))
+                con.execute("DELETE FROM packages WHERE path = ?", (p,))
+                silinen += 1
         for p in _paketler():
+            if butce_sn is not None and time.time() - t0 > butce_sn:
+                kesildi = True
+                break
             st = os.stat(p)
             onceki = mevcut.get(p)
             if not tam and onceki and abs(onceki[0] - st.st_mtime) < 1 and onceki[1] == st.st_size:
@@ -121,7 +135,7 @@ def guncelle(tam=False, ilerleme=None):
                 "VALUES(?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET "
                 "kid=excluded.kid,title=excluded.title,mtime=excluded.mtime,"
                 "size=excluded.size,msgs=excluded.msgs,indexed_at=excluded.indexed_at",
-                (p, kidler.get(os.path.abspath(p)), meta.get("b") or os.path.basename(p),
+                (p, kidler.get(os.path.abspath(p)), meta.get("baslik") or meta.get("b") or os.path.basename(p),
                  st.st_mtime, st.st_size, len(kayitlar), time.time()))
             if onceki:
                 guncellenen += 1
@@ -133,6 +147,7 @@ def guncelle(tam=False, ilerleme=None):
     finally:
         con.close()
     return {"yeni": yeni, "guncellenen": guncellenen, "atlanan": atlanan,
+            "silinen": silinen, "kesildi": kesildi,
             "ileti": ileti, "depo": yol(),
             "boyut": os.path.getsize(yol()) if os.path.exists(yol()) else 0}
 
@@ -164,6 +179,101 @@ def ara(sorgu, limit=25, paket_limit=3):
         if len(g["hits"]) < paket_limit:
             g["hits"].append({"i": idx, "role": role, "snippet": snip})
     return {"total": toplam, "packages": [dict(grup[p], path=p) for p in sira[:limit]]}
+
+
+_DUR = {"için", "icin", "olarak", "şimdi", "simdi", "bunu", "şunu", "sunu", "nasıl",
+        "nasil", "neden", "gibi", "daha", "sonra", "önce", "once", "kadar", "that",
+        "this", "with", "from", "what", "have", "please", "lütfen", "lutfen", "yap",
+        "yapar", "misin", "mısın", "olsun", "istiyorum", "bana", "bizim", "the", "and"}
+
+
+def _dur_k():
+    return {katla(w) for w in _DUR}
+
+
+def katla(metin):
+    """Karsilastirma icin: kucuk harf + Turkce/aksan katlama (eşiği == esigi).
+    FTS5 'remove_diacritics 2' ile ayni davranis; alaka kapisi da ayni gozle bakar."""
+    import unicodedata
+    t = str(metin).replace("İ", "i").replace("I", "ı").lower().replace("ı", "i")
+    return "".join(c for c in unicodedata.normalize("NFKD", t)
+                   if not unicodedata.combining(c))
+
+
+def anahtar_kelimeler(metin, azami=8):
+    """Serbest metin -> FTS icin anlamli kelimeler (uzunluk + nadirlik sirasi)."""
+    import re
+    global _DUR_K
+    if _DUR_K is None:
+        _DUR_K = _dur_k()
+    kel = []
+    for w in re.findall(r"[0-9A-Za-zÇĞİÖŞÜçğıöşü_]{4,}", str(metin)):
+        w = katla(w)
+        if w not in _DUR_K and w not in kel and not w.isdigit():
+            kel.append(w)
+    kel.sort(key=len, reverse=True)
+    return kel[:azami]
+
+
+_DUR_K = None
+
+
+def hatirla(metin, limit=3, haric=(), esik=0.5, haric_sid=None):
+    """RAG hatirlama: serbest metne (kullanici istegi) en ilgili gecmis iletiler.
+
+    `ara` tam ifade arar; bu ise kelimelerden herhangi birini (OR) bm25 ile
+    siralar, sonra ALAKA KAPISI uygular: sorgu kelimelerinin en az `esik`
+    orani (ve en az 2'si) isabet metninde gecmeli. Alakasiz hatirlatma,
+    hic hatirlatmamaktan kotudur — baglami bosuna sisirir.
+    Doner: [{kid, path, title, i, role, snippet, skor}] (en fazla `limit`)."""
+    global _DUR_K
+    if _DUR_K is None:
+        _DUR_K = _dur_k()
+    d = yol()
+    kel = anahtar_kelimeler(metin)
+    if not os.path.exists(d) or len(kel) < 2:
+        return []
+    q = " OR ".join('"%s"' % w.replace('"', '') for w in kel)
+    con = sqlite3.connect("file:%s?mode=ro" % d, uri=True, timeout=5)
+    try:
+        rows = con.execute(
+            "SELECT m.path, m.idx, m.role, m.text, "
+            "       snippet(mfts, 3, '', '', '…', 24), p.kid, p.title, bm25(mfts) "
+            "FROM mfts m JOIN packages p ON p.path = m.path "
+            "WHERE mfts MATCH ? AND m.role IN ('user', 'assistant') "
+            "ORDER BY bm25(mfts) LIMIT 200", (q,)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+    gerekli = max(2, int(len(kel) * esik + 0.999))
+    out, paketler, sid_onbellek, metinler = [], set(), {}, set()
+    for path, idx, role, text, snip, kid, title, skor in rows:
+        if path in haric or path in paketler or role == "tool":
+            continue
+        if haric_sid:
+            if path not in sid_onbellek:
+                try:
+                    sid_onbellek[path] = (hkp.meta_oku(path).get("kaynak") or {}).get("sid")
+                except Exception:
+                    sid_onbellek[path] = None
+            if sid_onbellek[path] == haric_sid:
+                continue  # ayni oturumun kendi paketi: zaten baglamda
+        alt = katla(text)
+        isabet = sum(1 for w in kel if w in alt)
+        if isabet < gerekli:
+            continue
+        ozu = " ".join(alt.split())[:300]
+        if ozu in metinler:
+            continue  # ayni oturumun farkli paketlerindeki ayni ileti: tek kez
+        metinler.add(ozu)
+        paketler.add(path)  # paket basina tek hatirlatma: cesitlilik
+        out.append({"kid": kid, "path": path, "title": title, "i": idx, "role": role,
+                    "snippet": " ".join(snip.split())[:180], "skor": round(-skor, 2),
+                    "isabet": "%d/%d" % (isabet, len(kel))})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def istatistik():

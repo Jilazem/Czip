@@ -52,6 +52,17 @@ Jev bulut kapısı 21.09'da gizlilik gerekçesiyle kapatıldı. Yerine YEREL mot
 - Hermes + Claude tek pakette: `czip birlestir <hermes-id> cc:<uuid>`
 - Çevre okuma: `czip cevre <id> <i>` (i±3 tam metin)
 
+## Otopilot mesajları (Claude Code hook'ları) — nasıl davranılır
+- `[CZIP HAFIZA]` / `YON KARTI`: listelenen **kararları** bozma (sormadan geri
+  alma), **SONRAKI ADIM**'dan başla, önce dosyaları/branch'i diskte doğrula.
+- `[CZIP BAGLAM KORUMA]`: oturum zaten paketlendi. Bağlamı şişirme: dosyanın
+  tamamı yerine grep / offset+limit, uzun çıktıda head/tail, yeniden okumak
+  yerine `czip ara <id> "..."`. %90'da alt iş bitince kullanıcıya /compact öner.
+- `[CZIP HATIRLATMA]`: bu istekle ilgili geçmiş iş; önemliyse tekrar yapmadan
+  önce `czip aralik <id> <i>` ile oku.
+- `[CZIP BAGLANTISI]` (sıkıştırma sonrası): özette eksik kalan pakette — tahmin etme.
+- Haftalık temizlik kendiliğinden çalışır: `czip temizle` (plan), `czip temizle geri`.
+
 ## Kurallar
 - `czip oku` çıktısındaki INDEKS'ten ilgili mesaj numaralarını bul,
   yalnız o aralıkları `czip aralik` ile oku — tüm paketi asla okuma.

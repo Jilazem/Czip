@@ -8,14 +8,96 @@ Güvenlik: state.db daima READ-ONLY; silme/bozma yok.
 """
 
 import asyncio
+import inspect
 import json
 import os
+import sys
 
 import hkp
 import time
-from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("oturum-sikistirici")
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # `pip install mcp` yoksa: asagidaki saf-stdlib sunucu
+    FastMCP = None
+
+
+class _MiniMCP:
+    """`mcp` paketi kurulu degilken ayni araclari sunan saf-stdlib MCP sunucusu.
+
+    Neden: czip 0 bagimliliktir; Claude Desktop/Code'da MCP'nin tek eksik
+    `pip install mcp` yuzunden "Connection closed" ile dusmesi kabul edilemez.
+    Kapsam: stdio JSON-RPC 2.0 — initialize, tools/list, tools/call, ping."""
+
+    TIPLER = {str: "string", int: "integer", bool: "boolean", float: "number"}
+
+    def __init__(self, ad):
+        self.ad = ad
+        self.araclar = {}
+
+    def tool(self):
+        def kaydet(fn):
+            self.araclar[fn.__name__] = fn
+            return fn
+        return kaydet
+
+    def _sema(self, fn):
+        ozellik, zorunlu = {}, []
+        for ad, p in inspect.signature(fn).parameters.items():
+            ozellik[ad] = {"type": self.TIPLER.get(p.annotation, "string")}
+            if p.default is inspect.Parameter.empty:
+                zorunlu.append(ad)
+            else:
+                ozellik[ad]["default"] = p.default
+        return {"type": "object", "properties": ozellik, "required": zorunlu}
+
+    def isle(self, istek):
+        """Tek JSON-RPC istegi -> cevap sozlugu (bildirimse None)."""
+        yontem, rid = istek.get("method"), istek.get("id")
+        if rid is None:
+            return None  # bildirim (notifications/initialized vb.)
+        par = istek.get("params") or {}
+        if yontem == "initialize":
+            sonuc = {"protocolVersion": par.get("protocolVersion") or "2024-11-05",
+                     "capabilities": {"tools": {}},
+                     "serverInfo": {"name": self.ad, "version": "1.0.0"}}
+        elif yontem == "ping":
+            sonuc = {}
+        elif yontem == "tools/list":
+            sonuc = {"tools": [{"name": ad, "description": inspect.getdoc(fn) or "",
+                                "inputSchema": self._sema(fn)}
+                               for ad, fn in self.araclar.items()]}
+        elif yontem == "tools/call":
+            fn = self.araclar.get(par.get("name"))
+            if fn is None:
+                return {"jsonrpc": "2.0", "id": rid,
+                        "error": {"code": -32602, "message": "bilinmeyen arac"}}
+            try:
+                metin, hata_mi = str(fn(**(par.get("arguments") or {}))), False
+            except Exception as e:  # noqa: BLE001
+                metin, hata_mi = "%s: %s" % (type(e).__name__, e), True
+            sonuc = {"content": [{"type": "text", "text": metin}], "isError": hata_mi}
+        else:
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32601, "message": "yontem yok: %s" % yontem}}
+        return {"jsonrpc": "2.0", "id": rid, "result": sonuc}
+
+    def run(self):
+        for satir in sys.stdin:
+            satir = satir.strip()
+            if not satir:
+                continue
+            try:
+                cevap = self.isle(json.loads(satir))
+            except ValueError:
+                cevap = {"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32700, "message": "parse error"}}
+            if cevap is not None:
+                sys.stdout.write(json.dumps(cevap, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+
+
+mcp = FastMCP("oturum-sikistirici") if FastMCP else _MiniMCP("oturum-sikistirici")
 
 
 @ mcp.tool()
@@ -306,6 +388,63 @@ def hafiza_durum() -> str:
                        "en_eski": time.strftime("%Y-%m-%d", time.localtime(st["oldest"] or 0)),
                        "en_yeni": time.strftime("%Y-%m-%d %H:%M", time.localtime(st["newest"] or 0)),
                        "yol": st["path"]}, ensure_ascii=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OTOPILOT — yon, brifing, hatirlama, temizlik (hook'larla ayni cekirdek)
+# ─────────────────────────────────────────────────────────────────────────────
+@mcp.tool()
+def yon_karti(paket: str = "son") -> str:
+    """Paketin YON KARTI: hedef, bozulmamasi gereken kararlar, acik isler, son hata,
+    dokunulan dosyalar ve karar mekanizmasinin onerdigi TEK sonraki adim.
+    Devralinan bir isi surdurmeden once bunu oku (~200-500 token)."""
+    import yon
+    try:
+        yol = hkp.id_coz(paket)
+        meta = hkp.meta_oku(yol)
+        k = meta.get("yon")
+        if not k:
+            _, kayitlar = hkp.yukle(yol)
+            soz = meta.get("soz", [])
+            k = yon.kart([dict(x, c=hkp.coz_sozluk(x["c"], soz)) if isinstance(x.get("c"), str)
+                          else x for x in kayitlar], meta.get("baslik"))
+        return yon.metin(k, paket if len(paket) == 6 else None, (meta.get("baslik") or "")[:60])
+    except Exception as e:
+        return hkp.hata(e)
+
+
+@mcp.tool()
+def hafiza_brifing(cwd: str = "") -> str:
+    """"Bu projede en son ne yaptim?" — gunlukten son isler + en son paketin yon karti.
+    cwd: proje dizini (bos = tum projeler)."""
+    import hafiza
+    return hafiza.brifing(cwd=cwd or None, n=5) or "(henuz kayit yok)"
+
+
+@mcp.tool()
+def hatirla(istek: str, limit: int = 3) -> str:
+    """Bu istekle ilgili gecmis is (RAG). Alaka kapisi: sorgu kelimelerinin en az
+    yarisi ayni iletide gecmeli — alakasiz hatirlatma yerine bos doner."""
+    import hafiza
+    metin, _ = hafiza.hatirlatma(istek, limit=max(1, min(int(limit), 8)))
+    return metin or "(ilgili gecmis yok)"
+
+
+@mcp.tool()
+def temizlik(uygula: bool = False) -> str:
+    """Haftalik temizlik. uygula=False: yalniz plan (hicbir seye dokunmaz).
+    uygula=True: gereksiz yiginlari COPE tasir (geri alinabilir: czip temizle geri),
+    30 gunluk copu bosaltir, eski id'leri yeni paketlere yonlendirir."""
+    import temizlik as _t
+    try:
+        islemler = _t.plan()
+        if not uygula:
+            return json.dumps({"plan": _t.ozet(islemler),
+                               "ogeler": [{"neden": x["neden"], "dosya": os.path.basename(x["yol"])}
+                                          for x in islemler[:40]]}, ensure_ascii=False)
+        return json.dumps(_t.uygula(islemler), ensure_ascii=False)
+    except Exception as e:
+        return hkp.hata(e)
 
 
 async def _run(name: str, **kw):

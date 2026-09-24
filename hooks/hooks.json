@@ -1,0 +1,27 @@
+{
+  "description": "czip otopilot: acilis brifingi + baglam koruma + RAG hatirlatma + compaction oncesi paketleme",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claude_hook.py\" SessionStart", "timeout": 30}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claude_hook.py\" UserPromptSubmit", "timeout": 60}
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/claude_hook.py\" PreCompact", "timeout": 120}
+        ]
+      }
+    ]
+  }
+}

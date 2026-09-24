@@ -65,6 +65,23 @@ Packs live in: `~/.hermes/session-packs/*.hkp`
   session (pre_llm_call, one-shot).
 - The plugin loads on gateway RESTART (allowlist: plugins.enabled).
 
+## Autopilot messages (Claude Code hooks) — how to act on them
+
+- `[CZIP HAFIZA]` / `YON KARTI` at session start: respect the listed
+  **decisions** (do not undo them without asking), start from **SONRAKI ADIM**,
+  and first verify the listed files/branch on disk (ls, git status).
+- `[CZIP BAGLAM KORUMA]`: the session is already packed. From now on keep
+  context lean: grep or read with offset/limit instead of whole files,
+  head/tail long command output, and use `czip ara <id> "..."` instead of
+  re-reading earlier parts. At 90 % suggest `/compact` to the user once the
+  current sub-task is done.
+- `[CZIP HATIRLATMA]`: past work related to this request. If it matters,
+  read the exact message with `czip aralik <id> <i>` before redoing work.
+- `[CZIP BAGLANTISI]` after compaction: details the summary lost are in the
+  named pack — look them up instead of guessing.
+- Weekly cleanup runs itself; to check: `czip temizle` (plan only),
+  undo: `czip temizle geri`.
+
 ## Rules
 
 - From the INDEX in `czip read` / `czip map` output, find the relevant message

@@ -1,7 +1,7 @@
 #!/bin/bash
 # czip kurulumu — terminal girisi + Hermes plugin + skill + MCP
 #   ./install.sh            -> Hermes (varsa) + terminal
-#   ./install.sh --claude   -> ayrica Claude Desktop + Claude Code (MCP + skill)
+#   ./install.sh --claude   -> ayrica Claude Desktop + Claude Code (MCP + skill + otopilot hook'lari)
 set -e
 KOK="$(cd "$(dirname "$0")" && pwd)"
 HE="${HERMES_HOME:-$HOME/.hermes}"
@@ -27,13 +27,13 @@ fi
 
 # 3) Claude Desktop + Claude Code (istege bagli)
 if [ "$1" = "--claude" ]; then
-  "$PY" -c "import mcp" 2>/dev/null || echo "UYARI: MCP icin once: $PY -m pip install mcp"
-  "$PY" "$KOK/scripts/claude_kur.py" --python "$PY"
+  "$PY" "$KOK/scripts/claude_kur.py" --python "$PY" --hooks
   mkdir -p "$HOME/.claude/skills/czip-session-pack"
   cp "$KOK/skills/czip-session-pack/SKILL.md" "$HOME/.claude/skills/czip-session-pack/"
   if command -v claude >/dev/null 2>&1; then
     claude mcp add --scope user czip -- "$PY" "$KOK/mcp_server.py" || true
   fi
-  echo "OK Claude — Desktop'u yeniden baslat; Claude Code'da skill: czip-session-pack"
+  echo "OK Claude — Desktop'u yeniden baslat. Otopilot acik: brifing + baglam koruma +"
+  echo "   RAG hatirlatma + compaction oncesi paket + haftalik temizlik (czip ayar ile kapat)"
 fi
 echo "(~/.local/bin PATH'te olmali; ornek: export PATH=\"\$HOME/.local/bin:\$PATH\")"

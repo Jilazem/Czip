@@ -112,6 +112,52 @@ czip birlestir <hermes-id> cc:<uuid>   # Hermes + Claude tek pakette
 ve Claude Code'a (`claude mcp add`) tanıtır, İngilizce beceriyi kurar.
 Yeni MCP araçları: `claude_oturumlari` (liste), `claude_oturum_paketle` (paketle).
 
+## v5 — otopilot: yön ver, koru, hatırla, temizle
+
+czip artık çağrılmayı beklemiyor. Claude Code / Claude Desktop'ta dört hook
+onu kendiliğinden çalıştırır (`./install.sh --claude`); söyleyecek bir şeyi
+yoksa sessiz kalır:
+
+| Ne zaman | czip ne yapar | Bağlama maliyeti |
+|---|---|---|
+| **Oturum açılışı** | *Brifing*: bu projede son yapılanlar + son paketin **yön kartı** | ~300–700 token, bir kez |
+| **Her istek** | *Koruma*: **gerçek** bağlam boyutunu okur (transcript'teki son `usage`). Kademe geçilince (%50/75/90 ya da `kalan_token`) oturumu kayıpsız paketler ve modele "bağlamı şişirme" der (dosyanın tamamı yerine grep, loglarda head/tail, yeniden okumak yerine `czip ara`). %90'da: `/compact` öner. | eşik altında 0; kademe başına bir kez ~120 token |
+| **Her istek** | *Hatırlatma* (RAG): isteği tüm geçmiş paketlerde arar, en fazla 3 tek satırlık isabet ekler — yalnız **alaka kapısından** geçerse (sorgu kelimelerinin en az yarısı aynı iletide; Türkçe harfler katlanır). Aynı oturumda tekrarlamaz, oturumun kendi paketini hatırlatmaz. | alakasızsa 0; ≤ ~250 token |
+| **Sıkıştırmadan önce** | Önce tüm oturumu paketler; sıkıştırma sonrası yeni bağlama `[CZIP BAGLANTISI]` + paket ID'si verilir — özetin düşürdüğü hiçbir şey kaybolmaz | ~150 token |
+
+**Yön kartı** (`czip yon <id>`) modele yön veren karar mekanizmasıdır. Her
+paketten LLM'siz çıkarılır: hedef, son istek, **bozulmaması gereken kararlar**
+("çünkü / yerine / asla …" satırları — yalnız tur sonu yanıtlarından, ara
+anlatımdan değil), **açık işler**, son hata, dokunulan dosyalar, **tek bir
+sonraki adım** (yanıtsız istek → yarım kalan tur → hata → açık iş) ve
+"önce diskte doğrula" kuralı. `--laya` ile yerel Laya kapısı bayat satırları
+ayrıca eler.
+
+**Günlük** (`czip gunluk`): her paket tek satır (tarih, proje, ID, sonraki
+adım) — "ne yapmıştım?" sorusunun ucuz cevabı. Her paket ayrıca tam metin
+deposuna kendiliğinden eklenir.
+
+**Haftalık temizlik** (`czip temizle`): varsayılan yalnız plan; `--uygula`
+ya da otopilot (7 günde bir, arka planda) gereksiz yığınları **çöp kutusuna**
+taşır, asla doğrudan silmez:
+
+- `yenisi_var` — aynı oturumun eski paketi; kullanıcı/asistan iletilerinin
+  ≥ %95'i yeni pakette var. Kısa ID'si yeni pakete **yönlendirilir**, eski
+  ID'ler çalışmaya devam eder. Kayıpsız (`--eksiksiz`) paket kırpılmış bir
+  paket yüzünden asla gitmez.
+- `ayni_icerik` — bayt bayt aynı paketler · `hayalet` — ≤ 2 ileti, < 4 KB,
+  7 günden eski · `eski_yedek` — czip dosyalarının 14 günden eski
+  `.bak/.yedek` kopyaları (her dosyanın en yeni 2 yedeği kalır) ·
+  `buyuk_log` — 2 MB üstü log son 512 KB'a iner.
+- Çöp 30 gün sonra boşaltılır; `czip temizle geri` son temizliği geri alır.
+
+Hepsi açılıp kapatılabilir: `czip ayar koruma|hatirlatma|brifing|haftalik_temizlik on|off`,
+1M bağlamlı modeller için `czip ayar ctx 1000000`.
+
+MCP sunucusu artık `pip install mcp` istemiyor: paket yoksa aynı 18 aracı
+sunan yerleşik saf-stdlib sunucuya geçer (`yon_karti`, `hatirla`,
+`hafiza_brifing`, `temizlik` yeni).
+
 ## Rakamlar (gerçek oturumlarda, kanıtlı)
 
 | Oturum | Ham | Paket | Oran |
@@ -144,8 +190,7 @@ slash komut olarak görünür.
 Claude Desktop / Claude Code için:
 
 ```bash
-python3 -m pip install mcp     # MCP sunucusu için gerekir (CLI için değil)
-./install.sh --claude
+./install.sh --claude    # MCP (pip gerekmez) + beceri + otopilot hook'ları
 ```
 
 ## Komutlar
@@ -196,7 +241,11 @@ czip aralik a37tvc 1040-1060   # sadece gereken kısım
 | `karar.py` | karar kapısı motor seçici (Laya yerel / Jev bulut) |
 | `laya_kapi.py` | kalıcı Laya işçi süreci (laya-mlx venv'inde çalışır) |
 | `ccd_dokum.py` | Claude Code / Desktop transcript `.jsonl` → czip iletleri |
-| `scripts/claude_kur.py` | MCP sunucusunu Claude Desktop'a tanıtır |
+| `scripts/claude_kur.py` | MCP sunucusunu Claude Desktop'a tanıtır (+ `--hooks` ile Claude Code otopilotu) |
+| `claude_hook.py` / `hooks/hooks.json` | otopilot hook'ları: brifing, koruma, hatırlatma, sıkıştırma öncesi paket |
+| `yon.py` | yön kartı: kararlar, açık işler, tek sonraki adım |
+| `hafiza.py` | günlük + açılış brifingi + alaka kapılı hatırlatma |
+| `temizlik.py` | çöp kutulu, ID yönlendirmeli, geri alınabilir haftalık temizlik |
 | `skills/` | skill köprüsü — komut geçmişi eski süreçte bile çalışır |
 | `scripts/kapak.py` | bu README kapağını üreten Pillow betiği |
 | `tests/` | sentetik round-trip + CLI + aralık testleri (4/4) |

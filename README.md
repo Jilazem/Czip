@@ -129,6 +129,52 @@ and in Claude Code (`claude mcp add`), and installs the English skill.
 New MCP tools: `claude_oturumlari` (list) and `claude_oturum_paketle`
 (pack).
 
+## v5 — autopilot: steer, guard, remember, clean
+
+czip no longer waits to be called. In Claude Code / Claude Desktop four
+hooks run it for you (`./install.sh --claude`), each silent unless it has
+something worth saying:
+
+| When | What czip does | Cost in context |
+|---|---|---|
+| **Session start** | *Brief*: what was done in this project lately + the **direction card** of the last pack | ~300–700 tokens, once |
+| **Every prompt** | *Guard*: reads the **real** context size (last `usage` in the transcript). Crossing a tier (50/75/90 %, or `kalan_token` left) packs the session losslessly and tells the model not to bloat context (grep instead of full reads, head/tail on logs, `czip ara` instead of re-reading). At 90 %: suggest `/compact`. | 0 below threshold; ~120 tokens once per tier |
+| **Every prompt** | *Recall* (RAG): searches all past packs for this request and injects at most 3 one-line hits — only if they pass the **relevance gate** (≥ half the query words in one message, Turkish letters folded). Never repeats a hit in the same session, never recalls the session's own packs. | 0 when irrelevant; ≤ ~250 tokens |
+| **Before compaction** | Packs the whole session first; after compaction the new context gets `[CZIP BAGLANTISI]` + the pack id, so nothing the summary dropped is lost | ~150 tokens |
+
+**Direction card** (`czip yon <id>`) is the decision mechanism that steers
+the model. It is extracted from every pack without an LLM: goal, last request,
+**decisions not to break** ("because / instead / never …" lines, taken only
+from end-of-turn replies, not narration), **open tasks**, last error, files
+touched, a **single next step** (unanswered request → interrupted turn →
+error → open task), and a verify-on-disk rule. With `--laya` the local Laya
+gate additionally filters stale lines.
+
+**Journal** (`czip gunluk`): one line per pack (date, project, id, next step)
+— the cheap answer to "what did I do?". Every pack is also added to the
+full-text store automatically.
+
+**Weekly cleanup** (`czip temizle`): dry run by default; `--apply` / the
+autopilot (every 7 days, in the background) moves junk to a **trash**
+folder, never deleting directly:
+
+- `yenisi_var` — an older pack of the same session whose user/assistant
+  messages are ≥ 95 % contained in a newer pack. Its short id is
+  **redirected** to the newer pack, so old ids keep working. A lossless
+  (`--full`) pack is never replaced by a trimmed one.
+- `ayni_icerik` — byte-identical packs · `hayalet` — ≤ 2 messages, < 4 KB,
+  > 7 days old · `eski_yedek` — `.bak/.yedek` copies of czip's own files
+  older than 14 days (the newest 2 per file are kept) · `buyuk_log` — logs
+  over 2 MB trimmed to the last 512 KB.
+- Trash is emptied after 30 days; `czip temizle geri` restores the last run.
+
+All of it is switchable: `czip settings guard|recall|brief|cleanup on|off`,
+`czip settings ctx 1000000` for 1M-context models.
+
+The MCP server no longer needs `pip install mcp`: without the package it
+falls back to a built-in stdlib JSON-RPC server with the same 18 tools
+(`yon_karti`, `hatirla`, `hafiza_brifing`, `temizlik` are new).
+
 ## Numbers (from real sessions, evidence-backed)
 
 | Session | Raw | Pack | Ratio |
@@ -162,8 +208,7 @@ as real commands in new sessions.
 For Claude Desktop / Claude Code:
 
 ```bash
-python3 -m pip install mcp     # the MCP server needs it (the CLI does not)
-./install.sh --claude
+./install.sh --claude    # MCP (no pip needed) + skill + autopilot hooks
 ```
 
 ## Commands
@@ -222,7 +267,11 @@ czip range a37tvc 1040-1060   # only the part you need
 | `karar.py` | decision-gate engine selector (Laya local / Jev cloud) |
 | `laya_kapi.py` | persistent Laya worker (runs inside the laya-mlx venv) |
 | `ccd_dokum.py` | Claude Code / Desktop transcript `.jsonl` → czip messages |
-| `scripts/claude_kur.py` | registers the MCP server in Claude Desktop |
+| `scripts/claude_kur.py` | registers the MCP server in Claude Desktop (+ `--hooks` for Claude Code) |
+| `claude_hook.py` / `hooks/hooks.json` | autopilot hooks: brief, guard, recall, pre-compact pack |
+| `yon.py` | direction card: decisions, open tasks, single next step |
+| `hafiza.py` | journal + session brief + relevance-gated recall |
+| `temizlik.py` | weekly cleanup with trash, id redirects and undo |
 | `skills/` | skill bridge — commands work even in old processes |
 | `scripts/kapak.py` | Pillow script that renders the terminal cover |
 | `tests/` | synthetic round-trip + CLI + range tests (4/4) |

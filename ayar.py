@@ -21,6 +21,16 @@ their behaviour.
   bulut_yedegi: if Laya fails, fall back to cloud Jev. OFF by default (KVKK:
                 session samples must not leave the machine).
   laya_python : python of the laya-mlx venv (env CZIP_LAYA_PY wins)
+
+  Otopilot (Claude Code hook'lari, claude_hook.py):
+  koruma            : baglam esigi gecince paketle + "sisirme" talimati ver
+  hatirlatma        : her istekte ilgili gecmis isi (RAG) hatirlat
+  hatirlatma_max    : istek basina en fazla hatirlatma satiri
+  brifing           : oturum acilisinda "bu projede son yapilanlar" + yon karti
+  claude_ctx        : Claude baglam penceresi (token); asilirsa 1M varsayilir
+  hook_laya         : hook paketlemesinde de Laya kapisini kullan (yavas olabilir)
+  haftalik_temizlik : 7 gunde bir temizligi arka planda kendiliginden calistir
+  temizlik_gun / cop_gun / bak_temizle : temizlik araligi, cop omru, yedek budama
 """
 from __future__ import annotations
 
@@ -43,6 +53,17 @@ VARSAYILAN = {
     "oto": False,
     "oto_pasif": False,
     "jev": True,
+    "koruma": True,
+    "hatirlatma": True,
+    "hatirlatma_max": 3,
+    "brifing": True,
+    "brifing_n": 3,
+    "claude_ctx": 200000,
+    "hook_laya": False,
+    "haftalik_temizlik": True,
+    "temizlik_gun": 7,
+    "cop_gun": 30,
+    "bak_temizle": True,
 }
 
 

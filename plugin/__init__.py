@@ -89,8 +89,22 @@ def _paketle(args: str) -> str:
     os.makedirs(paket_dizin, exist_ok=True)
     ad = _slug(baslik) + "-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".hkp"
     yol = os.path.join(paket_dizin, ad)
-    r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik, jev=jev)
+    ek = {}
+    import inspect as _insp
+    if "kaynak" in _insp.signature(m.sikistir).parameters:  # eski motorla uyum
+        ek["kaynak"] = {"sid": sid, "proje": (baslik or "")[:40]}
+    r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik, jev=jev, **ek)
     _SON["yol"] = r["yol"]
+    # hafiza: gunluk + RAG indeksi (hata paketi bozmaz; motor dizininde hafiza.py yoksa atlanir)
+    try:
+        import sys as _sys
+        if _motor_dizin() not in _sys.path:
+            _sys.path.insert(0, _motor_dizin())
+        import hafiza as _hz
+        _hz.kaydet(r, m.id_ata(r["yol"], baslik or sid), r.get("kaynak"))
+    except Exception:
+        pass
+    yon_satir = ((r.get("yon") or {}).get("sonraki") or "")
     kirp = ""
     if r.get("eksik_bildirim"):
         kirp = " (kirpilan {} araç çıktısı — eksiksiz modla tam kalır)".format(len(r["eksik_bildirim"]))
@@ -104,6 +118,7 @@ def _paketle(args: str) -> str:
             r["mesaj"], r["kaynak_bayt"], r["paket_bayt"], r["oran"],
             r["sozluk"], r["parca"], kirp, jtxt),
         "   paket: " + r["yol"],
+        ("   sonraki adim: " + yon_satir) if yon_satir else "",
         "",
         "Sonraki adım — yeni oturumda (paket ACILMAZ, sadece okunur):",
         "   /new " + (baslik or sid)[:55],

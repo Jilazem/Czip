@@ -462,13 +462,15 @@ def sozluk_gecis(kayitlar, sozluk, alt_min=3, sat_min=24):
 
 
 # ------------------------------------------------------------- paket I/O
-def paketle(kayitlar, sozluk, sabitler, baslik=None):
+def paketle(kayitlar, sozluk, sabitler, baslik=None, ek_meta=None):
     veri = json.dumps(kayitlar, ensure_ascii=False, separators=(",", ":")) + "\n"
     meta = {"v": V, "soz": list(sozluk),
             "sabit": {k: next(iter(v)) for k, v in sabitler.items() if len(v) == 1},
             "n": len(kayitlar)}
     if baslik:
         meta["baslik"] = baslik
+    if ek_meta:
+        meta.update(ek_meta)
     mbayt = lzma.compress(json.dumps(meta, ensure_ascii=False).encode("utf-8"), **LZMA_SABIT)
     vbayt = lzma.compress(veri.encode("utf-8"), **LZMA_SABIT)
     return mbayt, vbayt
@@ -490,6 +492,16 @@ def paket_oku(yol):
     meta = json.loads(lzma.decompress(ham[12:12 + mu]))
     veri = lzma.decompress(ham[12 + mu:12 + mu + vu]).decode("utf-8")
     return meta, veri
+
+
+def meta_oku(yol):
+    """Yalniz meta (baslik, n, yon karti, kaynak) — govdeyi acmadan, hizli."""
+    with open(os.path.expanduser(yol), "rb") as f:
+        bas = f.read(12)
+        if not bas.startswith(IMZA):
+            raise ValueError("HKP1 imzasi yok")
+        mu, _ = struct.unpack("<II", bas[4:12])
+        return json.loads(lzma.decompress(f.read(mu)))
 
 
 def coz_sozluk(s, sozluk):
@@ -519,13 +531,15 @@ def tam_ilet(k, sozluk, reasoning=True):
 
 # ------------------------------------------------------------- yuksuk seviye
 def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
-             baslik=None, kaynak_bayt=None, jev=False):
+             baslik=None, kaynak_bayt=None, jev=False, kaynak=None):
     """Mesaj listesi -> .hkp paketi. Sozluk doner (hata durumunda 'hata' anahtari).
     jev=True: 'akilli' modda buyuk arac ciktilarini karar kapisina (varsayilan
     YEREL Laya; bkz. karar.py) toplu sor; olu olanlar paketten cikarilir (iz
     birakarak), gerekenler OLDUGU GIBI kalir, ortalar statik dilime duser.
     Motora ulasilamazsa mevcut statik dilim davranisina doner. (Parametre adi
-    geriye uyum icin 'jev' kaldi.)"""
+    geriye uyum icin 'jev' kaldi.)
+    kaynak: {"sid", "proje", "cwd", "dal"} — temizlik (ayni oturumun eski
+    paketleri) ve hafiza gunlugu (proje bazli hatirlama) icin meta'ya yazilir."""
     sabit_adaylari = {}
     kayitlar = []
     for m in mesajlar:
@@ -586,9 +600,20 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
         tekrar_sayisi += 1
         tekrar_bayt += len(c) - len(k["c"])
 
+    # YON KARTI: sozluk jetonlamasindan ONCE (duz metin uzerinde) cikarilir.
+    try:
+        import yon as _yon
+        yon_karti = _yon.kart(kayitlar, baslik, karar_kapisi=jev and mod == "akilli")
+    except Exception:
+        yon_karti = None
+    ek = {"mod": mod, "t": time.strftime("%Y-%m-%d %H:%M")}
+    if yon_karti:
+        ek["yon"] = yon_karti
+    if kaynak:
+        ek["kaynak"] = {k: v for k, v in kaynak.items() if v}
     sozluk = Sozluk()
     sozluk_gecis(kayitlar, sozluk)
-    mbayt, vbayt = paketle(kayitlar, sozluk, sabit_adaylari, baslik)
+    mbayt, vbayt = paketle(kayitlar, sozluk, sabit_adaylari, baslik, ek)
     yol = os.path.expanduser(cikti)
     if yol.endswith(".hzip"):
         yol = yol[:-len(".hzip")] + ".hkp"
@@ -602,7 +627,7 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
             "oran": round(kb / max(1, toplam), 1), "mesaj": len(kayitlar),
             "sozluk": len(sozluk), "mod": mod, "eksik_bildirim": eksikler or None,
             "tekrar": tekrar_sayisi, "tekrar_bayt": tekrar_bayt,
-            "jev": jev_bilgi,
+            "jev": jev_bilgi, "yon": yon_karti, "baslik": baslik, "kaynak": kaynak,
             "parca": max(1, -(-len(kayitlar) // PARCA_ILET))}
 
 
@@ -801,7 +826,8 @@ def harita(dosya, son_n=6, istek_max=40):
                        for k in kayitlar)
     return {
         "tam_karakter": tam_karakter,
-        "baslik": meta.get("b") or os.path.basename(dosya),
+        "baslik": meta.get("baslik") or meta.get("b") or os.path.basename(dosya),
+        "yon": meta.get("yon"),
         "toplam": len(kayitlar),
         "roller": roller,
         "araclar": sorted(araclar.items(), key=lambda x: -x[1])[:12],
@@ -834,6 +860,12 @@ _ALIAS = {
     "help": "yardim",
     "around": "cevre",
     "claude": "cc",
+    "direction": "yon",
+    "clean": "temizle",
+    "cleanup": "temizle",
+    "journal": "gunluk",
+    "recall": "hatirla",
+    "brief": "brifing",
 }
 
 # Output language: English by default; CZIP_LANG=tr restores Turkish.
@@ -869,6 +901,12 @@ def _main(argv):
               "  czip cevre <id|son> <i> [--n=3] -> i'nin cevresi (i-n..i+n tam metin)\n"
               "  czip cc [--n=10]        -> Claude Code/Desktop oturumlari (cc:<uuid> ile paketle)\n"
               "  --laya: karar kapisi (yerel Laya; eski ad --jev). Motor: czip ayar motor laya|jev\n"
+              "  czip yon <id|son>       -> yon karti: hedef, kararlar, acik isler, SONRAKI ADIM\n"
+              "  czip gunluk [--n=10]    -> ne yaptim? paket gunlugu (proje bazli)\n"
+              "  czip brifing [--cwd=DIR]-> acilis brifingi (hook'un verdigi metin)\n"
+              "  czip hatirla \"istek\"   -> bu istekle ilgili gecmis is (RAG, alaka kapili)\n"
+              "  czip temizle [--uygula] [geri [ZAMAN]] -> haftalik temizlik (varsayilan: sadece plan)\n"
+              "  czip hook <Olay>        -> Claude Code hook girisi (stdin JSON)\n"
               "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
               "  czip ayar [esik 50|kademe 50,75,90|oto on]  -> thresholds & auto mode\n"
               "  czip index [--full]     -> build the searchable store over all packages\n"
@@ -937,8 +975,11 @@ def _main(argv):
         os.makedirs(d, exist_ok=True)
         temiz = re.sub(r"[^A-Za-z0-9-]+", "-", baslik[:48]).strip("-") or "birlesik"
         yol = os.path.join(d, f"BIRLESIK-{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
-        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
+        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev,
+                     kaynak={"sid": "birlesik:" + "+".join(sorted(idler)), "proje": baslik[:40]})
         kid = id_ata(r["yol"], baslik)
+        import hafiza as _hz
+        _hz.kaydet(r, kid, r.get("kaynak"))
         print(f"BIRLESTIRILDI: {r['yol']}\n  ID={kid}")
         for x in rapor["ayrinti"]:
             print(f"    - {x['sid']}  {x['ilet']} ilet")
@@ -994,6 +1035,7 @@ def _main(argv):
         oto = "--oto" in kalan[1:] or "--oto-pasif" in kalan[1:]
         oto_pasif = "--oto-pasif" in kalan[1:]
         birlesenler = []
+        kaynak = None
         if oto:
             try:
                 import birlestir as _b
@@ -1031,6 +1073,9 @@ def _main(argv):
                 mesajlar, baslik = _cc.oku(_y)
                 baslik = (baslik or os.path.basename(_y))[:60]
                 sid = "cc:" + os.path.splitext(os.path.basename(_y))[0]
+                _cwd = _cc.calisma_dizini(_y)
+                kaynak = {"sid": sid, "cwd": _cwd,
+                          "proje": os.path.basename((_cwd or "").rstrip("/"))}
                 print(T("CLAUDE SESSION: %s  (%d messages)",
                         "CLAUDE OTURUMU: %s  (%d ileti)") % (_y, len(mesajlar)))
             elif os.path.isfile(_aday):
@@ -1056,8 +1101,11 @@ def _main(argv):
         os.makedirs(d, exist_ok=True)
         temiz = re.sub(r"[^A-Za-z0-9-]+", "-", (baslik or sid)[:48]).strip("-") or sid
         yol = os.path.join(d, f"{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
-        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
+        kaynak = kaynak or {"sid": sid, "proje": (baslik or "")[:40]}
+        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev, kaynak=kaynak)
         kid = id_ata(r["yol"], baslik or sid)
+        import hafiza as _hz
+        _hz.kaydet(r, kid, kaynak)
         kirp = len(r.get("eksik_bildirim") or [])
         jv = r.get("jev") or {}
         jtxt = ("" if not jv else
@@ -1070,6 +1118,8 @@ def _main(argv):
               + (f"  tekrar_ayiklandi={r['tekrar']}(-{r['tekrar_bayt']//1024}KB)" if r.get("tekrar") else "")
               + jtxt
               + f"\n  oku: czip oku {kid}   ara: czip ara {kid} \"sorgu\"")
+        if r.get("yon", {}) and r["yon"].get("sonraki"):
+            print("  sonraki adim: " + r["yon"]["sonraki"])
         # AYNI ISI YAPAN OTURUM UYARISI — paketledikten sonra, karari Jev verir.
         # --yalniz ile kapatilir (tarama Jev cagrisi yapar, her zaman istenmez).
         if oto and birlesenler and oto_pasif:
@@ -1134,6 +1184,10 @@ def _main(argv):
                   + T("   (fall back to cloud Jev if Laya fails — sends samples out)",
                       "   (Laya cokerse bulut Jev'e dus — ornek disari gider)"))
             print("  jev       : " + ("ON" if a.get("jev", True) else "off"))
+            print(T("  autopilot (Claude hooks):", "  otopilot (Claude hook'lari):"))
+            for ad in ("koruma", "hatirlatma", "brifing", "haftalik_temizlik", "hook_laya"):
+                print("    %-17s: %s" % (ad, "ON" if a.get(ad) else "off"))
+            print("    claude_ctx       : %d" % a.get("claude_ctx", 200000))
             return 0
         anahtar = kalan[0].lower()
         deger = kalan[1] if len(kalan) > 1 else ""
@@ -1169,6 +1223,15 @@ def _main(argv):
             elif anahtar in ("mutlak", "mutlak_token", "absolute"):
                 _a.yaz(mutlak_token=max(0, int(float(deger))))
                 print("mutlak_token -> %d" % max(0, int(float(deger))))
+            elif anahtar in ("koruma", "hatirlatma", "brifing", "haftalik_temizlik",
+                             "hook_laya", "bak_temizle", "guard", "recall", "brief", "cleanup"):
+                ad = {"guard": "koruma", "recall": "hatirlatma", "brief": "brifing",
+                      "cleanup": "haftalik_temizlik"}.get(anahtar, anahtar)
+                _a.yaz(**{ad: acik})
+                print("%s -> %s" % (ad, "ON" if acik else "off"))
+            elif anahtar in ("ctx", "claude_ctx", "pencere"):
+                _a.yaz(claude_ctx=max(1000, int(float(deger))))
+                print("claude_ctx -> %d" % max(1000, int(float(deger))))
             elif anahtar == "jev":
                 _a.yaz(jev=acik)
                 print("jev -> " + ("ON" if acik else "off"))
@@ -1325,6 +1388,10 @@ def _main(argv):
                  h["tekrar_isaretli"]))
         if h["araclar"]:
             out.append("TOOLS " + " ".join("%s:%d" % kv for kv in h["araclar"]))
+        if h.get("yon"):
+            import yon as _yon
+            _kid = kalan[0] if kalan and len(kalan[0]) == 6 else None
+            out.append(_yon.metin(h["yon"], _kid))
         out.append("REQUESTS %d total, last %d:" % (h["istek_toplam"], len(h["istekler"])))
         for i, c in h["istekler"]:
             out.append("  %d| %s" % (i, c))
@@ -1356,6 +1423,91 @@ def _main(argv):
         print("COST map~%s tok vs full~%s tok -> %d%% saved (%.0fx)" % (
             _k_fmt(harita_tok), _k_fmt(tam_tok),
             max(0, round(100 * (1 - harita_tok / tam_tok))), tam_tok / harita_tok))
+        return 0
+    if emir == "yon":
+        yol = id_coz(kalan[0]) if kalan else son_paket()
+        if not yol or not os.path.exists(yol):
+            print("HATA: paket bulunamadi:", kalan[0] if kalan else "(son)")
+            return 2
+        import yon as _yon
+        meta = meta_oku(yol)
+        k = meta.get("yon")
+        if not k:  # eski paket: kart yok -> simdi cikar (paketi degistirmeden)
+            _, kayitlar = yukle(yol)
+            soz = meta.get("soz", [])
+            kayitlar = [dict(x, c=coz_sozluk(x["c"], soz)) if isinstance(x.get("c"), str) else x
+                        for x in kayitlar]
+            k = _yon.kart(kayitlar, meta.get("baslik"))
+        print(_yon.metin(k, kalan[0] if kalan and len(kalan[0]) == 6 else None,
+                         (meta.get("baslik") or "")[:60]))
+        return 0
+    if emir == "gunluk":
+        import hafiza as _hz
+        n = 10
+        for a in kalan:
+            if a.startswith("--n="):
+                n = max(1, int(a.split("=", 1)[1]))
+        liste = _hz.gunluk(n=n)
+        if not liste:
+            print(T("journal is empty — pack something first", "gunluk bos — once paketle"))
+            return 0
+        for o in liste:
+            print("%s  %s  [%s] %s  (%s ileti)" % (o["t"], o.get("kid") or "?",
+                  (o.get("proje") or "")[:20], (o.get("baslik") or "")[:50], o.get("ileti")))
+            if o.get("sonraki"):
+                print("      sonraki: " + o["sonraki"][:120])
+        return 0
+    if emir == "brifing":
+        import hafiza as _hz
+        cwd = None
+        for a in kalan:
+            if a.startswith("--cwd="):
+                cwd = os.path.abspath(os.path.expanduser(a.split("=", 1)[1]))
+        print(_hz.brifing(cwd=cwd, n=5) or T("(nothing recorded yet)", "(henuz kayit yok)"))
+        return 0
+    if emir == "hatirla":
+        if not kalan:
+            print("HATA: kullanim -> czip hatirla \"istek metni\"")
+            return 2
+        import hafiza as _hz
+        metin, _ = _hz.hatirlatma(" ".join(kalan), limit=5)
+        print(metin or T("(nothing relevant — no recall is better than a wrong one)",
+                         "(ilgili gecmis yok — yanlis hatirlatmaktansa hic)"))
+        return 0
+    if emir == "temizle":
+        import temizlik as _t
+        if kalan and kalan[0] == "geri":
+            n = _t.geri_al(kalan[1] if len(kalan) > 1 else None)
+            print(T("restored %d items", "%d oge geri yuklendi") % n)
+            return 0
+        sessiz = "--sessiz" in kalan
+        islemler = _t.plan()
+        if "--uygula" not in kalan:
+            print(T("CLEANUP PLAN (dry run): ", "TEMIZLIK PLANI (deneme): ") + _t.ozet(islemler))
+            for x in islemler[:40]:
+                print("  %-11s %7.1f KB  %s%s" % (x["neden"], x.get("bayt", 0) / 1024,
+                      os.path.basename(x["yol"]),
+                      ("  -> " + os.path.basename(x["yonlendir"])) if x.get("yonlendir") else ""))
+            print(T("apply: czip clean --apply   (moves to trash; undo: czip clean geri)",
+                    "uygula: czip temizle --uygula   (cope tasir; geri: czip temizle geri)"))
+            return 0
+        r = _t.uygula(islemler)
+        if not sessiz:
+            print(T("CLEANED: ", "TEMIZLENDI: ") + _t.ozet(islemler))
+            print("  cop: %s   bosaltilan eski cop: %d   budanan kayit: %d" % (
+                r["cop"] or "-", r["bosaltilan"], r["kayit_budanan"]))
+            if r["cop"]:
+                print(T("  undo: czip clean geri", "  geri al: czip temizle geri"))
+        return 0
+    if emir == "hook":
+        import claude_hook as _h
+        try:
+            veri = json.load(sys.stdin)
+        except Exception:
+            veri = {}
+        cikti = _h.calistir(kalan[0] if kalan else veri.get("hook_event_name", ""), veri)
+        if cikti:
+            print(cikti)
         return 0
     if emir == "cc":
         import ccd_dokum as _cc

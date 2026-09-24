@@ -129,6 +129,25 @@ def oku(yol):
     return mesajlar, baslik
 
 
+def calisma_dizini(yol):
+    """Dokumdeki ilk 'cwd' alani (projeyi bulmak icin); yoksa None."""
+    try:
+        with open(os.path.expanduser(yol), encoding="utf-8", errors="replace") as f:
+            for i, satir in enumerate(f):
+                if '"cwd"' in satir:
+                    try:
+                        c = json.loads(satir).get("cwd")
+                    except ValueError:
+                        continue
+                    if c:
+                        return c
+                if i > 200:
+                    break
+    except OSError:
+        pass
+    return None
+
+
 def oturumlar(dizin=None, limit=20):
     """En yeni Claude Code oturum dokumleri: [(yol, mtime, bayt)]."""
     d = os.path.expanduser(dizin or PROJE_DIZIN)
