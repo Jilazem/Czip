@@ -29,9 +29,10 @@ def sikistir(girdi: str, cikti: str, mod: str = "akilli",
             silinir (bosluk, satir tekrar, sozluk, null'lar, reasoning ikizi);
             'eksiksiz' = her bayt geri doner, hicbir kirpma yok.
     arac_bas/son: akilli modda arac icerigi bas/son dilim baytlari (0 = kirpma).
-    jev:    True = akilli modda buyuk arac ciktilarini Jev'e (System-One) toplu sor;
-            olu olanlar paketten cikarilir (izli marker), gerekenler OLDUGU GIBI
-            kalir, ortalar statik dilime duser. Jev erisilemezse statik dilime doner.
+    jev:    True = akilli modda buyuk arac ciktilarini karar kapisina (varsayilan
+            YEREL Laya, bkz. karar.py) toplu sor; olu olanlar paketten cikarilir
+            (izli marker), gerekenler OLDUGU GIBI kalir, ortalar statik dilime
+            duser. Motor erisilemezse statik dilime doner.
     Doner: yol, bayt, oran, mesaj sayisi, sozluk, eksik bildirimi, jev raporu, parca sayisi."""
     try:
         kaynak_bayt = None
@@ -118,12 +119,59 @@ def oturum_sikistir(session_id: str, cikti: str, mod: str = "akilli",
     tasinmasi kolay .hkp uretir.
 
     session_id: 'son' / 'en-uzun' / net ID / benzersiz onek.
-    jev: True = buyuk arac ciktilarini Jev'e sor; oluler paketten cikarilir.
+    jev: True = buyuk arac ciktilarini karar kapisina sor (varsayilan YEREL
+         Laya; bulut Jev yalniz ayarla secilirse); oluler paketten cikarilir.
     Baska bir sey isterseniz once durum_tablosu ile semayi gorun."""
     try:
         sid, mesajlar, baslik = hkp.oturum_oku(session_id)
         sonuc = hkp.sikistir(mesajlar, cikti, mod, baslik=baslik, jev=jev)
         sonuc["session_id"] = sid
+        return json.dumps(sonuc, ensure_ascii=False)
+    except Exception as e:
+        return hkp.hata(e)
+
+
+@mcp.tool()
+def claude_oturumlari(limit: int = 10) -> str:
+    """Claude Code / Claude Desktop oturum dokumleri (~/.claude/projects/*/*.jsonl).
+
+    Doner: [{id, proje, tarih, kb}] — en yeni once. id'yi claude_oturum_paketle'ye ver."""
+    import ccd_dokum
+    try:
+        return json.dumps([{"id": os.path.splitext(os.path.basename(y))[0],
+                            "proje": os.path.basename(os.path.dirname(y)),
+                            "tarih": time.strftime("%Y-%m-%d %H:%M", time.localtime(mt)),
+                            "kb": round(b / 1024, 1)}
+                           for y, mt, b in ccd_dokum.oturumlar(limit=limit)],
+                          ensure_ascii=False)
+    except Exception as e:
+        return hkp.hata(e)
+
+
+@mcp.tool()
+def claude_oturum_paketle(oturum: str = "son", mod: str = "akilli",
+                          laya: bool = False) -> str:
+    """Bir Claude Code / Claude Desktop oturumunu HKP1 paketine sikistirir.
+
+    oturum: 'son' (en yeni) / oturum uuid'si (onek yeter) / .jsonl dosya yolu.
+    laya:   True = buyuk arac ciktilarini yerel Laya karar kapisina sor.
+    Doner: paket yolu + 6 haneli kisa ID. Okuma: hafiza_harita / mesajlar."""
+    import ccd_dokum
+    try:
+        yol = ccd_dokum.coz(oturum if oturum.startswith("cc:") else "cc:" + oturum)
+        if not yol:
+            return hkp.hata("Claude Code oturumu bulunamadi: %s" % oturum)
+        mesajlar, baslik = ccd_dokum.oku(yol)
+        if not mesajlar:
+            return hkp.hata("oturum bos: %s" % yol)
+        import re as _re
+        temiz = _re.sub(r"[^A-Za-z0-9-]+", "-", (baslik or "claude")[:48]).strip("-") or "claude"
+        cikti = os.path.join(os.path.expanduser(hkp.PAKET_DIZIN),
+                             "CC-%s-%s.hkp" % (temiz, time.strftime("%Y%m%d-%H%M%S")))
+        sonuc = hkp.sikistir(mesajlar, cikti, mod, baslik=baslik,
+                             kaynak_bayt=os.path.getsize(yol), jev=laya)
+        sonuc["id"] = hkp.id_ata(sonuc["yol"], baslik)
+        sonuc["kaynak"] = yol
         return json.dumps(sonuc, ensure_ascii=False)
     except Exception as e:
         return hkp.hata(e)

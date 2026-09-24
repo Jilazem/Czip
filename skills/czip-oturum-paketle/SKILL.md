@@ -37,6 +37,21 @@ Paketler: `~/.hermes/session-packs/*.hkp`
   mesajına `[CZIP BAGLANTISI]` talimatı enjekte edilir (pre_llm_call, tek seferlik).
 - Plugin gateway RESTART'ıyla yüklenir (allowlist: plugins.enabled).
 
+## Karar kapısı: Laya (23.09.2026 — yerel, buluta veri gitmez)
+Jev bulut kapısı 21.09'da gizlilik gerekçesiyle kapatıldı. Yerine YEREL motor:
+- `--laya` (eski ad `--jev`) büyük araç çıktılarını yerel Laya'ya sorar
+  (işçi: `laya_kapi.py`, laya-mlx venv'i: `CZIP_LAYA_PY`).
+- Eşikler: silme 0.15 (Jev'in 0.30'undan korumacı), tutma 0.55.
+  Hata içeren çıktılar sorgulanmadan korunur.
+- Türkçe içerik önce node1 (Qwen) ile EN'e çevrilir; kapatmak: `CZIP_LAYA_CEVIRI=0`.
+- Motor: `czip ayar motor laya|jev`. Laya çalışmazsa kapı atlanır; bulut
+  Jev'e düşüş YALNIZ `czip ayar bulut on` ile (varsayılan kapalı, KVKK).
+
+## Claude Code / Claude Desktop oturumları
+- Liste: `czip cc` · paketle: `czip paketle cc:son` / `cc:<uuid>`
+- Hermes + Claude tek pakette: `czip birlestir <hermes-id> cc:<uuid>`
+- Çevre okuma: `czip cevre <id> <i>` (i±3 tam metin)
+
 ## Kurallar
 - `czip oku` çıktısındaki INDEKS'ten ilgili mesaj numaralarını bul,
   yalnız o aralıkları `czip aralik` ile oku — tüm paketi asla okuma.

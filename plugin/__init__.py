@@ -6,7 +6,7 @@ Motor: ~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici/hkp.py (saf stdlib, MCP ge
   /czip son             en son aktif oturumu paketle
   /czip <id>            baska oturumu paketle (onek eslesmesi olur)
   /czip <id> --eksiksiz kirpmasiz mod
-  /czip <id> --jev    buyuk arac ciktilarini Jev'e sor; oluler paketten cikar
+  /czip <id> --laya   buyuk arac ciktilarini yerel Laya kapisina sor (eski: --jev)
   /cunzip <paket.hkp>   INDEKS + son 6 ilet + durum (~30 KB; tam paket baglama GIRMEZ)
   /cunzip <paket> <a-b> yalniz o araliktaki iletileri tam metin ver
 """
@@ -74,7 +74,7 @@ def _paketle(args: str) -> str:
     m = _motor()
     parca = args.split()
     mod = "eksiksiz" if "--eksiksiz" in parca else "akilli"
-    jev = "--jev" in parca
+    jev = bool({"--jev", "--laya", "--karar"} & set(parca))
     idler = [p for p in parca if not p.startswith("--")]
     secim = idler[0] if idler else "son"
     if secim == "aktif":
@@ -95,7 +95,8 @@ def _paketle(args: str) -> str:
     if r.get("eksik_bildirim"):
         kirp = " (kirpilan {} araç çıktısı — eksiksiz modla tam kalır)".format(len(r["eksik_bildirim"]))
     jv = r.get("jev") or {}
-    jtxt = "" if not jv else " | Jev: sil {} / tut {} / kirp {}".format(
+    jtxt = "" if not jv else " | {}: sil {} / tut {} / kirp {}".format(
+        str(jv.get("motor", "laya")).capitalize(),
         jv.get("sil", 0), jv.get("tut", 0), jv.get("kirp", 0))
     return "\n".join([
         "📦 Oturum paketlendi: " + (baslik or sid),
@@ -158,7 +159,7 @@ def _birlestir(args: str) -> str:
         return "❌ /cmerge motoru yuklenemedi: " + str(e)
 
     parca = args.split()
-    jev = "--jev" in parca
+    jev = bool({"--jev", "--laya", "--karar"} & set(parca))
     mod = "eksiksiz" if "--eksiksiz" in parca else "akilli"
     gun = 7
     for p in parca:
@@ -183,7 +184,7 @@ def _birlestir(args: str) -> str:
         satir = ["🔎 /cmerge aday taramasi — son {} gun, {} benzer cift".format(gun, len(ciftler))]
         jb = (iz.get("jev") or {})
         if jev:
-            satir.append("   Jev karar kapisi: " + (
+            satir.append("   {} karar kapisi: ".format(str(jb.get("motor", "laya")).capitalize()) + (
                 "HATA ({}) — yerel benzerlige dusuldu".format(jb.get("hata"))
                 if jb.get("hata") else
                 "{} soru / {} cevap".format(jb.get("soru"), jb.get("cevap"))))
@@ -198,7 +199,7 @@ def _birlestir(args: str) -> str:
         if not gruplar:
             satir.append("Esigi gecen grup yok — birlestirme yapilmadi.")
             if not jev:
-                satir.append("Ipucu: --jev ile Jev karar kapisina sordurabilirsin.")
+                satir.append("Ipucu: --laya ile yerel Laya karar kapisina sordurabilirsin.")
             return "\n".join(satir)
         satir.append("BIRLESTIRILEBILIR GRUPLAR:")
         for i, g in enumerate(gruplar, 1):
@@ -206,7 +207,7 @@ def _birlestir(args: str) -> str:
         if not oto:
             satir.append("")
             satir.append("Uygulamak icin:  /cmerge " + " ".join(gruplar[0]) +
-                         (" --jev" if jev else ""))
+                         (" --laya" if jev else ""))
             return "\n".join(satir)
         idler = gruplar[0]
         satir.append("")
@@ -218,8 +219,8 @@ def _birlestir(args: str) -> str:
     if len(idler) < 2:
         return ("❌ /cmerge en az 2 oturum ister.\n"
                 "   /cmerge            -> aday tara (degistirmez)\n"
-                "   /cmerge oto --jev  -> en guclu grubu Jev onayiyla birlestir\n"
-                "   /cmerge <id1> <id2> [--jev] [--eksiksiz]")
+                "   /cmerge oto --laya -> en guclu grubu Laya onayiyla birlestir\n"
+                "   /cmerge <id1> <id2> [--laya] [--eksiksiz]")
 
     # --- BIRLESTIR + PAKETLE ------------------------------------------------
     try:
@@ -270,7 +271,7 @@ def register(ctx: Any) -> None:
         "czip",
         lambda args="": _paketle(args),
         description="Pack the session into a .hkp archive — auto-merges same-job sessions.",
-        args_hint="[son|aktif|<id>] [--oto] [--oto-pasif] [--jev] [--eksiksiz]",
+        args_hint="[son|aktif|<id>] [--oto] [--oto-pasif] [--laya] [--eksiksiz]",
     )
     ctx.register_command(
         "cunzip",
@@ -281,8 +282,8 @@ def register(ctx: Any) -> None:
     ctx.register_command(
         "czipmerge",
         lambda args="": _birlestir(args),
-        description="Merge 2+ sessions doing the same job into ONE .hkp pack (gated by a Jev verdict).",
-        args_hint="[bak|oto|<id1> <id2> ...] [--jev] [--eksiksiz] [--gun=7]",
+        description="Merge 2+ sessions doing the same job into ONE .hkp pack (gated by a local Laya verdict).",
+        args_hint="[bak|oto|<id1> <id2> ...] [--laya] [--eksiksiz] [--gun=7]",
     )
     # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
     ctx.register_command(

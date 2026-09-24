@@ -9,10 +9,11 @@ aciliyor (telegram'dan bir tane, TUI'den bir tane, gece cron'undan bir tane).
 Her biri ayri ayri buyuyor, hicbiri otekinin ne yaptigini bilmiyor, ve
 state.db'de birikip sikistirma dongusunu tikiyorlar.
 
-Karar asamalari (ucu de Jev'e sorulabilir, --jev ile):
+Karar asamalari (ucu de karar kapisina sorulabilir, --laya ile; motor
+varsayilan YEREL Laya, eski bulut Jev yalniz acikca secilirse — bkz. karar.py):
   1) ADAY BULMA      — baslik + kullanici mesaji ortakligi (yerel, ucuz)
   2) AYNI IS MI?     — Jev noul skoru; esik alti aday elenir
-  3) ARAC CIKTISI    — hkp.sikistir'in mevcut Jev budamasi (degismedi)
+  3) ARAC CIKTISI    — hkp.sikistir karar kapisi budamasi (Laya/Jev)
 
 Jev'e ulasilamazsa 2. asama yerel benzerlik skoruna duser (fail-open degil:
 esik yerel skorda daha yuksek tutulur, yani supheli olani birlestirmez).
@@ -123,10 +124,8 @@ def adaylari_bul(gun=7, en_fazla=40):
 
 
 def _jev_ayni_is(ciftler, timeout=25):
-    """Her aday cifti Jev'e sorar. Doner: ({(sid_a,sid_b): noul}, bilgi)."""
-    key = hkp._jev_anahtar()
-    if not key:
-        return {}, {"hata": "anahtar_yok"}
+    """Her aday cifti karar motoruna (Laya/Jev) sorar. Doner: ({(sid_a,sid_b): noul}, bilgi)."""
+    import karar as _k
     durum = ("Merging Hermes agent sessions. Decide whether two sessions are the "
              "SAME ongoing piece of work (so their transcripts should live in one "
              "session) or genuinely separate tasks that happen to share vocabulary.")
@@ -142,11 +141,11 @@ def _jev_ayni_is(ciftler, timeout=25):
             "into one session would help rather than confuse the reader?"
         ).format(a["baslik"][:120], a["ozet"], b["baslik"][:120], b["ozet"], skor)
     try:
-        noullar = hkp._jev_batch(key, durum, sorular, timeout)
+        noullar, motor = _k.sor(durum, sorular, timeout)
     except ValueError as e:
-        return {}, {"hata": str(e)}
+        return {}, {"hata": str(e), "motor": _k.motor_adi()}
     return ({esleme[q]: n for q, n in noullar.items() if q in esleme},
-            {"soru": len(sorular), "cevap": len(noullar)})
+            {"soru": len(sorular), "cevap": len(noullar), "motor": motor})
 
 
 def gruplari_kur(ciftler, jev=False):
@@ -164,7 +163,7 @@ def gruplari_kur(ciftler, jev=False):
         noul = noullar.get(anahtar)
         if noul is not None:
             kabul = noul >= JEV_BIRLESTIR
-            kaynak = "jev"
+            kaynak = (jbilgi or {}).get("motor", "laya")
             deger = noul
         else:
             kabul = skor >= YEREL_BIRLESTIR
@@ -218,6 +217,16 @@ def oturumlari_birlestir(sidler):
         raise ValueError("birlestirme icin en az 2 oturum gerekir")
     kaynaklar = []
     for s in sidler:
+        if str(s).startswith("cc:"):
+            # Claude Code / Desktop dokumu: Hermes oturumuyla ayni pakete girebilir
+            import ccd_dokum as _cc
+            yol = _cc.coz(s)
+            if not yol:
+                raise ValueError("Claude Code oturumu bulunamadi: %s" % s)
+            k = _cc.kaynak(yol)
+            k["sid"] = "cc:" + k["sid"]
+            kaynaklar.append(k)
+            continue
         sid, mesajlar, baslik = hkp.oturum_oku(s)
         kaynaklar.append({"sid": sid, "mesaj": mesajlar, "baslik": baslik or sid})
     # en cok iletisi olan oturumun basligi birlesik pakete ad olur

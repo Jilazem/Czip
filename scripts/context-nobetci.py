@@ -37,13 +37,20 @@ ESİK_TOKEN = int(os.environ.get("CZIP_ESİK_TOKEN", "150000"))   # mutlak eşik
 # Eşik/kademe/oto ayarı artık tek yerden: ~/.hermes/czip/ayar.json
 # (`czip ayar esik 50`, `czip ayar kademe 50,75,90`, `czip auto on`).
 # Ayar dosyası okunamazsa eski davranışa düşülür — nöbetçi asla susmaz.
+_ESIK_FN = None  # ayar.esik_token varsa: oran / kalan_token / mutlak_token, ilk gelen
+
+
 def _ayar():
     varsayilan = {"esik_oran": 0.30, "kademeler": [0.50, 0.75, 0.90],
                   "oto": False, "oto_pasif": False, "jev": True}
     try:
         sys.path.insert(0, os.path.expanduser(
             "~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici"))
+        # repo kopyasi da yedek yol (scripts/.. = czip koku)
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         import ayar as _a
+        global _ESIK_FN
+        _ESIK_FN = getattr(_a, "esik_token", None)
         return _a.oku()
     except Exception:
         yol = os.path.join(HERMES_HOME, "czip", "ayar.json")
@@ -232,7 +239,9 @@ def main(argv):
         if test_sid and test_sid not in sid:
             continue
         deger, ctx = _kullanim(r)
-        esik = max(ESİK_TOKEN, ESİK_ORAN * ctx)
+        # Yeni ayar (kalan_token/mutlak_token) varsa onun esigi; yoksa eski kural.
+        esik = (_ESIK_FN(ctx, AYAR) if _ESIK_FN and ctx
+                else max(ESİK_TOKEN, ESİK_ORAN * ctx))
         oran = deger / ctx if ctx else 0
         if deger < esik and not test_sid:
             continue

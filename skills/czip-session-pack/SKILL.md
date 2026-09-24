@@ -27,7 +27,26 @@ run it via the terminal. Never load a whole pack into context.
 5. Search INSIDE a pack without unpacking (matching message indices + context):
    `czip search <id|last> "query"` → for a hit index i, get full text via
    `czip range <id> i`.
-6. Registered packs: `czip list` (id | date | title).
+6. Neighbours of a search hit: `czip around <id|last> <i> [--n=3]`.
+7. Registered packs: `czip list` (id | date | title).
+
+## Claude Code / Claude Desktop sessions
+
+Claude Code sessions (including those started from Claude Desktop) are
+stored as `~/.claude/projects/<project>/<session>.jsonl`.
+
+- List them: `czip cc`
+- Pack the newest (usually this conversation): `czip pack cc:last`
+- Pack a specific one: `czip pack cc:<uuid-prefix>`
+- Merge with a Hermes session: `czip merge <hermes-id> cc:<uuid>`
+- MCP tools (Claude Desktop): `claude_oturumlari`, `claude_oturum_paketle`
+
+## Decision gate: Laya (local) — replaces Jev
+
+`--laya` (old name `--jev`) asks the local Laya model whether large tool
+outputs are still needed. Nothing leaves the machine. If Laya is not
+installed the gate is skipped (static slicing). Cloud Jev is used only if
+the user enabled `czip settings cloud on` — never turn it on yourself.
 
 Packs live in: `~/.hermes/session-packs/*.hkp`
 
@@ -53,5 +72,5 @@ Packs live in: `~/.hermes/session-packs/*.hkp`
 - "continue where you left off" = the recent-messages section is already given
   in full.
 - For lossless carry-over use `--full` (~7x instead of 8.4x).
-- The same actions exist as MCP tools: the oturum-sikistirici MCP's
-  `oturum_sikistir`, `kilavuz`, `mesajlar` tools (preference order irrelevant).
+- The same actions exist as MCP tools: `oturum_sikistir`, `kilavuz`,
+  `mesajlar`, `hafiza_harita`, `claude_oturum_paketle` (preference order irrelevant).

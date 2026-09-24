@@ -70,19 +70,64 @@ Detects sessions doing the same job and consolidates them into **one
 pack**; optionally archives the sources (close + archive; messages are
 never deleted, `czip undo` restores them).
 
-The decision is made by **Jev** — and it actually matters: local
-similarity wanted to merge two unrelated case files at 0.75, **Jev
-scored it 0.13 and rejected it**; a true copy was approved at 0.97.
+The decision is made by the **decision gate** — and it actually matters:
+local similarity wanted to merge two unrelated case files at 0.75, the
+gate scored it 0.13 and rejected it; a true copy was approved at 0.97.
 Scheduled-task boilerplate is filtered out (41 false matches → 20).
 
 ```
 czip merge               # read-only candidate scan
-czip merge auto --jev    # merge + archive sources
+czip merge auto --laya   # merge + archive sources
 czip undo <file>         # restore
 ```
 
 `czip pack` also warns after packing when "another session did this job
-too" (the decision again belongs to Jev).
+too" (the decision again belongs to the gate).
+
+## v4 — the decision gate went local: Jev → Laya
+
+The gate used to be **Jev** (typesafe.ai System-One, a cloud API). It sent
+the session title, recent user messages and tool-output samples out, so
+it was **switched off on 2026-09-21** for privacy. Since 2026-09-23 the
+default engine is **Laya** ([laya-mlx](https://github.com/mizorewww/laya-mlx)),
+running on your own machine: no API key, nothing leaves the machine.
+
+| | Laya (default) | Jev (legacy) |
+|---|---|---|
+| Where it runs | local (`laya_kapi.py` worker, model loaded once) | cloud API |
+| Delete threshold | **0.15** (more protective — Laya scores are context-sensitive) | 0.30 |
+| Keep threshold | 0.55 | 0.55 |
+| Needs | laya-mlx venv (`CZIP_LAYA_PY`) | `TYPESAFE_API_KEY` |
+
+- Turkish text is first translated to English by a local model
+  (node1 / Qwen, `LAYA_NODE1_URL`) because Laya is weak in Turkish.
+  Translations that swallow content (`"..."`) are rejected — measured
+  on 2026-09-24, that bug silently deleted outputs Laya would keep at 0.73.
+  Turn translation off with `CZIP_LAYA_CEVIRI=0`.
+- If Laya is unavailable the gate is **skipped** and static slicing is
+  used. Cloud fallback to Jev happens **only** if you enable it:
+  `czip settings cloud on` (off by default).
+- Engine: `czip settings engine laya|jev` or `CZIP_KARAR_MOTORU`.
+- `--laya` turns the gate on; the old `--jev` flag still works.
+
+## v4 — Claude Code & Claude Desktop
+
+Claude Code sessions (also the ones started from Claude Desktop) live in
+`~/.claude/projects/<project>/<session>.jsonl`, not in Hermes' `state.db`.
+czip now reads them directly:
+
+```
+czip cc                  # list recent Claude Code sessions
+czip pack cc:last        # pack the newest one
+czip pack cc:<uuid>      # or a specific one (prefix is enough)
+czip merge <hermes-id> cc:<uuid>   # one pack across Hermes + Claude
+```
+
+`./install.sh --claude` registers the MCP server in Claude Desktop
+(`claude_desktop_config.json`, backed up first, other servers untouched)
+and in Claude Code (`claude mcp add`), and installs the English skill.
+New MCP tools: `claude_oturumlari` (list) and `claude_oturum_paketle`
+(pack).
 
 ## Numbers (from real sessions, evidence-backed)
 
@@ -110,9 +155,16 @@ git clone https://github.com/Jilazem/Czip && cd Czip
 ```
 
 Installs: `czip` CLI (`~/.local/bin`) + Hermes plugin (`/czip`,
-`/cunzip`, `/cmap`, `/csearch` slash commands) + skill bridge + a
-7-tool MCP server. After restarting Hermes, the slash commands appear
+`/cunzip`, `/cmap`, `/csearch` slash commands) + skill bridge + an
+MCP server. After restarting Hermes, the slash commands appear
 as real commands in new sessions.
+
+For Claude Desktop / Claude Code:
+
+```bash
+python3 -m pip install mcp     # the MCP server needs it (the CLI does not)
+./install.sh --claude
+```
 
 ## Commands
 
@@ -120,12 +172,14 @@ English aliases work everywhere (`pack` = Turkish `paketle`, etc.);
 Turkish remains the native naming:
 
 ```
-czip pack <session_id|last|longest> [--full] [--jev]  → pack + 6-char id
+czip pack <session_id|last|longest|FILE|cc:last> [--full] [--laya]  → pack + 6-char id
 czip read <id|last>           → WITHOUT UNPACKING: index + recent + status
 czip map <id|last>            → RAG map (~1.5k tokens; the cheap read)
 czip search <id|last> "query" → search inside a pack, find message indices
 czip range <id|last> <a-b>    → exact messages, tokens resolved
-czip merge [auto|<id1> <id2>] [--jev] [--days=7]
+czip around <id|last> <i> [--n=3] → message i with n neighbours each side
+czip cc                       → Claude Code / Desktop sessions
+czip merge [auto|<id1> <id2>] [--laya] [--days=7]
 czip undo [<file>]            → restore archived sessions
 czip list                     → registered packs: id | date | title
 ```
@@ -135,6 +189,7 @@ Carry-over flow in a new session:
 ```
 czip map a37tvc               # which messages hold what
 czip search a37tvc "edge case"
+czip around a37tvc 1047       # the hit plus 3 messages each side
 czip range a37tvc 1040-1060   # only the part you need
 ```
 
@@ -149,12 +204,12 @@ czip range a37tvc 1040-1060   # only the part you need
 - **Privacy** — `state.db` is always opened via a READ-ONLY URI; packs
   are written only under `~/.hermes/session-packs`; nothing leaves the
   machine; the engine has no delete/corrupt capability.
-- **Optional Jev gate** — `--jev` asks an external LLM
-  (typesafe.ai System-One) in batches whether tool outputs above
-  1,200 B are needed; outputs containing error hints are never
-  questioned. **Off by default** — it sends sample content out, so it
-  requires an explicit flag + API key, and silently falls back to
-  static behavior on network failure.
+- **Optional decision gate** — `--laya` asks the local Laya model in
+  batches whether tool outputs above 1,200 B are needed; outputs
+  containing error hints are never questioned. Off by default; falls
+  back silently to static slicing when Laya is not installed.
+- **Token economy line** — `czip map` ends with
+  `COST map~Nk tok vs full~Mk tok -> X% saved`, so the saving is visible.
 
 ## Components
 
@@ -163,7 +218,11 @@ czip range a37tvc 1040-1060   # only the part you need
 | `hkp.py` | **engine** — pure stdlib (Python 3.9+, 0 deps): pack/read/search, CLI, state.db RO reader |
 | `czip` | terminal entry point (one-line wrapper) |
 | `plugin/` | Hermes plugin — `/czip`, `/cunzip` slash commands |
-| `mcp_server.py` | 7-tool MCP server (compress/open/guide/messages/…) |
+| `mcp_server.py` | MCP server (compress/open/guide/messages/memory/Claude sessions) |
+| `karar.py` | decision-gate engine selector (Laya local / Jev cloud) |
+| `laya_kapi.py` | persistent Laya worker (runs inside the laya-mlx venv) |
+| `ccd_dokum.py` | Claude Code / Desktop transcript `.jsonl` → czip messages |
+| `scripts/claude_kur.py` | registers the MCP server in Claude Desktop |
 | `skills/` | skill bridge — commands work even in old processes |
 | `scripts/kapak.py` | Pillow script that renders the terminal cover |
 | `tests/` | synthetic round-trip + CLI + range tests (4/4) |
@@ -181,7 +240,8 @@ timestamp) — resolved into readable text on demand.
 ## Tests
 
 ```bash
-python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
+python3 tests/test_roundtrip.py          # 4/4: pack→read→range + stats
+python3 -m unittest discover -s tests    # manifests + Laya gate + Claude bridge
 ```
 
 ## Limits
@@ -192,8 +252,9 @@ python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
   from sensitive sessions to anyone with disk access.
 - The `state.db` schema varies with Hermes versions; the engine skips
   missing columns via PRAGMA.
-- `--jev` is an external service (off by default); avoid it under
-  data-protection policies.
+- The Jev engine is an external service (off by default, and the cloud
+  fallback is off too); avoid it under data-protection policies.
+  Laya needs Apple-silicon MLX (laya-mlx); elsewhere the gate is skipped.
 
 ## License
 
