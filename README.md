@@ -195,6 +195,13 @@ python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
 - `--jev` is an external service (off by default); avoid it under
   data-protection policies.
 
+## Benchmarks
+
+- [Super-Context Proof (2026-09-29)](benchmarks/super-context-proof.md) — a
+  **748,800-token** corpus recalled at **100% (80/80)** with **112-token** prompts
+  via czip RAG; blind control **0% (0/40)**; 2-hop chains 30%.
+  Chart: [PNG](benchmarks/superbaglam-chart.png).
+
 ## License
 
 - **Individual / non-commercial use: free and open.**
