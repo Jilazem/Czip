@@ -1,4 +1,4 @@
-# Super-Context Proof: Unbounded Agent Memory Without an Unbounded Window
+# Archived Super-Context Test: Searchable History Beyond the Model Window
 
 **TL;DR:** We dumped a **748,800-token** corpus into a compressed, searchable session
 archive (Czip / HKP1) and quizzed a local model (**GLM-5.3-Flash-EXL3**, 262K window,
@@ -10,14 +10,14 @@ archive (Czip / HKP1) and quizzed a local model (**GLM-5.3-Flash-EXL3**, 262K wi
 | Blind control (same questions, no czip) | **0% (0/40)** | — |
 | 2-hop chain (cross-record relation) | 30% (6/20) | ~2× hops |
 
-The model recalled a raw context **6,685× larger** than the prompts it saw. The blind
-arm's perfect zero proves the memory is *external* — it lives in the archive, not in
-weights and not in the window.
+The model answered from a corpus **6,685× larger** than the average single-hop
+prompt. The blind control's zero correct answers is consistent with the
+needed facts being retrieved from the archive rather than guessed.
 
 ## The claim
 
-> If your agent's memory is compressed + RAG-indexed, **context-window size stops
-> mattering**. Longer windows are solving the wrong problem.
+> For this synthetic single-hop task, a searchable archive lets a finite-window
+> model answer from a history larger than its prompt window.
 
 ## Setup
 
@@ -52,24 +52,22 @@ weights and not in the window.
 
 | Comparison | Raw-context route | czip route |
 |---|---|---|
-| Recall 748,800 tokens | needs ≥ 750K window *per call* | **112-token** calls |
-| Cost growth | linear in history | flat (snippet-sized) |
-| Memory ceiling | the window | the disk |
-| Keeps full sessions (567K+ msgs) | impossible at inference | `czip ara` / `harita` on demand |
+| Access a 748,800-token corpus | full-context input needs ≥ 750K tokens | **112-token** average single-hop prompts in this run |
+| Input cost | grows with supplied history | depends on retrieved snippets and tool calls |
+| Retained history | limited by the supplied prompt | stored in a searchable archive on disk |
 
-A 262K window cannot hold this corpus raw. A 1M window barely holds *this one*
-snapshot — and the archive grows daily. With czip, effective memory is unbounded
-while per-call cost stays constant.
+A 262K window cannot hold this corpus raw. Czip stores it outside the prompt
+and retrieves selected evidence. Retrieval quality and per-question cost can
+change as the archive grows; this run does not establish a constant-cost bound.
 
-## Reproduce
+## Reproduction status
 
-```bash
-python3 03-SCRIPTS/czip_superbaglam_provasi.py
-# devam-duyarlı: rerun skips packing, resumes at the exam
-```
-
-The harness generates the corpus, packs it (`czip paketle`), indexes (`czip index`),
-runs the three arms and writes JSON + Markdown reports.
+This page is an archived run report. Its original harness
+(`03-SCRIPTS/czip_superbaglam_provasi.py`) and raw per-question outputs are
+not included in this repository, so this result cannot currently be
+independently reproduced from this page alone. The new
+[Continuity Gauntlet](https://github.com/Jilazem/czip-continuity-gauntlet)
+publishes its generator, runner, scoring rules, and raw-run report format.
 
 ## Limitations (kept in)
 
@@ -80,8 +78,8 @@ runs the three arms and writes JSON + Markdown reports.
 
 ## Takeaway
 
-**Don't buy context, buy recall.** Compress once, index everything, retrieve exactly:
-the window becomes an implementation detail.
+**Keep the source history and measure retrieval.** This run shows strong
+single-hop recall and a weak two-hop result. The model window remains finite.
 
 ---
 

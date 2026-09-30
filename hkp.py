@@ -465,7 +465,8 @@ def paket_yaz(yol, mbayt, vbayt):
 
 
 def paket_oku(yol):
-    ham = open(yol, "rb").read()
+    with open(yol, "rb") as f:
+        ham = f.read()
     if not ham.startswith(IMZA):
         raise ValueError("HKP1 imzasi yok — bu aracla uretilmis bir dosya degil")
     mu, vu = struct.unpack("<II", ham[4:12])

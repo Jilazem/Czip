@@ -24,6 +24,30 @@ history.*
 
 **Finite context. Persistent memory.**
 
+## See the memory claim tested
+
+[Czip Continuity Gauntlet](https://github.com/Jilazem/czip-continuity-gauntlet)
+is an open, reproducible benchmark for a local model working through one
+long engineering conversation. The same model answers with Czip retrieval,
+a rolling summary, or only its recent messages. The eight checks cover
+old facts, changed decisions, revoked permissions, reopened work, two-hop
+evidence, tool outputs, and honest abstention. Every run records exact
+answers, source indices, retrieval traces, token use when available, and
+dataset/engine hashes.
+
+**Try it with your own OpenAI-compatible local model:**
+
+```bash
+git clone https://github.com/Jilazem/czip-continuity-gauntlet.git
+cd czip-continuity-gauntlet
+python bench.py generate --seed 20260930 --filler-per-gap 60 --output data/public-seed.json
+# Run with --czip-source pointing to your separate Czip checkout; see benchmark README.
+```
+
+The benchmark tests the *model plus memory workflow*. Czip does not enlarge
+the model's native context window, and other retrieval systems can be tested
+on the same tasks.
+
 ## v3 — the read cost was the real bottleneck
 
 Compression ratio turned out to be the wrong metric: the pack file never
@@ -201,6 +225,10 @@ python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
   **748,800-token** corpus recalled at **100% (80/80)** with **112-token** prompts
   via czip RAG; blind control **0% (0/40)**; 2-hop chains 30%.
   Chart: [PNG](benchmarks/superbaglam-chart.png).
+- [Continuity Gauntlet](https://github.com/Jilazem/czip-continuity-gauntlet) —
+  a reproducible, source-grounded comparison against rolling-summary and
+  recent-message baselines, using the same local model. Results are reported
+  by the benchmark runner; no pre-run score is implied here.
 
 ## License
 
