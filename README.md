@@ -48,6 +48,16 @@ The benchmark tests the *model plus memory workflow*. Czip does not enlarge
 the model's native context window, and other retrieval systems can be tested
 on the same tasks.
 
+In the [30 September 2026 local GLM run](https://github.com/Jilazem/czip-continuity-gauntlet/tree/main/results/2026-09-30),
+Czip, rolling summary, and full history each scored **8/8** grounded answers
+on 615 messages; the last-24-message control scored **1/8**. Czip used
+**71,243** prompt tokens across those questions versus **369,536** for full
+history and **88,171** for summary including its preparation calls. On two
+additional 4,015-message seeds, Czip scored **16/16** and the recent-message
+control **2/16**. These are synthetic runs of one model and one task template;
+summary and full history were not tested at the larger size. The model's
+native token count for those larger histories was not available.
+
 ## v3 — the read cost was the real bottleneck
 
 Compression ratio turned out to be the wrong metric: the pack file never
@@ -226,9 +236,10 @@ python3 tests/test_roundtrip.py   # 4/4: pack→read→range + stats
   via czip RAG; blind control **0% (0/40)**; 2-hop chains 30%.
   Chart: [PNG](benchmarks/superbaglam-chart.png).
 - [Continuity Gauntlet](https://github.com/Jilazem/czip-continuity-gauntlet) —
-  a reproducible, source-grounded comparison against rolling-summary and
-  recent-message baselines, using the same local model. Results are reported
-  by the benchmark runner; no pre-run score is implied here.
+  a reproducible, source-grounded comparison against rolling-summary,
+  recent-message, and full-history baselines using the same local model.
+  [Run reports and raw traces](https://github.com/Jilazem/czip-continuity-gauntlet/tree/main/results/2026-09-30)
+  include the development failure and final protocol.
 
 ## License
 
