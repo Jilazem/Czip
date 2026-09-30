@@ -37,6 +37,13 @@ def main():
     assert kil["ok"] and kil["toplam"] == 4 and "indeks" in kil
     ar = hkp.mesaj_araligi(r["yol"], "2-3")
     assert len(ar) == 2 and ar[0]["rol"] == "tool" and ar[1]["rol"] == "assistant"
+    linked = [{"role": "user", "content":
+               "[Czip](https://github.com/Jilazem/Czip) please add the benchmark"},
+              {"role": "assistant", "content": "I will add it."}]
+    linked_pack = hkp.sikistir(linked, os.path.join(gecici, "linked"), mod="eksiksiz")
+    linked_map = hkp.harita(linked_pack["yol"])
+    assert any("please add the benchmark" in content
+               for _, content in linked_map["istekler"]), linked_map
     print("TEST GECTI: round-trip 4/4 + kilavuz + aralik (paket %d B / %d ilet)"
           % (r["paket_bayt"], r["mesaj"]))
 

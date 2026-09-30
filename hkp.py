@@ -773,7 +773,9 @@ def harita(dosya, son_n=6, istek_max=40):
         if r == "user":
             c = coz_sozluk(k.get("c") or "", sozluk)
             c = " ".join(str(c).split())
-            if c and not c.startswith("[") and not c.startswith("──"):
+            # A real user request may start with a Markdown link: [label](url).
+            # The role already excludes tool/system messages, so keep it.
+            if c and not c.startswith("──"):
                 istekler.append((i, c[:96]))
     tekrar = sum(1 for k in kayitlar
                  if isinstance(k.get("c"), str) and k["c"].startswith("[AYNI-#"))
