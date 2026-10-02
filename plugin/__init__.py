@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """/czip + /cunzip — oturumu HKP1 paketine sikistir, yeni oturumda paketi ACMADAN oku.
 
-Motor: ~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici/hkp.py (saf stdlib, MCP gerektirmez).
+Motor: $CZIP_HKP (varsayilan ~/czip/hkp.py) (saf stdlib, MCP gerektirmez).
   /czip                 aktif oturumu paketle + sonraki adim komutlarini yazdir
   /czip son             en son aktif oturumu paketle
   /czip <id>            baska oturumu paketle (onek eslesmesi olur)
@@ -18,7 +18,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-_MOTOR = os.path.expanduser("~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici/hkp.py")
+_MOTOR = os.environ.get("CZIP_HKP", os.path.expanduser("~/czip/hkp.py"))
 _SON = {"yol": None}
 
 
@@ -91,6 +91,7 @@ def _paketle(args: str) -> str:
     yol = os.path.join(paket_dizin, ad)
     r = m.sikistir(mesajlar, yol, mod=mod, baslik=baslik, jev=jev)
     _SON["yol"] = r["yol"]
+    _SON["sid"] = sid
     kirp = ""
     if r.get("eksik_bildirim"):
         kirp = " (kirpilan {} araç çıktısı — eksiksiz modla tam kalır)".format(len(r["eksik_bildirim"]))
@@ -264,6 +265,158 @@ def _birlestir(args: str) -> str:
     return "\n".join(satirlar)
 
 
+
+def _cli(*args: str) -> str:
+    """Motoru CLI olarak calistirir (auto/ayar/search/asearch/index/gorev ayni cikti)."""
+    import subprocess
+    import sys
+    ortam = dict(os.environ)
+    ortam.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    try:
+        r = subprocess.run([sys.executable, _MOTOR, *args], capture_output=True, text=True,
+                           timeout=900, env=ortam, cwd=_motor_dizin())
+    except Exception as e:  # noqa: BLE001
+        return "❌ czip motoru calistirilamadi: " + str(e)[:200]
+    cikti = (r.stdout or "").strip() or (r.stderr or "").strip()
+    return cikti[:3500] or "(cikti yok)"
+
+
+def _son(args: str) -> str:
+    """Aktif oturumu paketle + RAG arsivine al + session'i pasife (sonlandir) al.
+    Silmek guvenli: icerik pakette, geri alma czip gerial ile."""
+    secim = (args or "").strip()
+    onceki = _paketle("aktif" if not secim else secim)
+    if onceki.startswith("❌"):
+        return onceki
+    yol = _SON.get("yol")
+    if not yol or not os.path.isfile(yol):
+        return onceki + "\n⚠️ Paket yolu cozulemedi; oturum ACIK birakildi."
+    try:
+        kid = _motor().id_ata(yol)  # kayitta mevcut -> ayni id doner
+    except Exception:
+        kid = None
+    _b = _birlestirici()
+    sid = _SON.get("sid") or _aktif_session_id()
+    try:
+        pr = _b.pasife_al([sid], yol, kid, sebep="czip_son")
+    except Exception as e:
+        return onceki + "\n⚠️ Sonlandirma basarisiz: " + str(e)[:110] + "\n   Paket hazir: " + yol
+    if not pr.get("pasif"):
+        at = pr.get("atlanan") or [{}]
+        return onceki + "\n⚠️ Oturum sonlandirilamadi: " + str(at[0].get("neden", "bilinmeyen"))
+    oku = ("   Oku:  czip oku " + kid + "   ara:  czip ara " + kid + " \"sorgu\""
+           if kid else "   Oku:  czip read son")
+    return "\n".join([
+        onceki,
+        "",
+        "🔒 Oturum sonlandirildi (arsivlendi): " + sid[:16],
+        "   Icerik pakette — liste:  czip listele",
+        oku,
+        "   Geri al:  czip gerial " + os.path.basename(pr["gerial"]),
+        "   → artik 'New session' ile temiz oturum acilabilir; liste temiz.",
+    ])
+
+
+def _auto(args: str) -> str:
+    """Otomatik paketleme modunu ac/kapat; ardindan guncel ayari gosterir."""
+    secim = (args or "on").split()[0].lower()
+    if secim not in ("on", "off", "ac", "kapat", "durum"):
+        return "Kullanim: /czipauto [on|off]"
+    if secim == "durum":
+        return _cli("ayar")
+    return _cli("auto", {"ac": "on", "kapat": "off"}.get(secim, secim)) + "\n\n" + _cli("ayar")
+
+
+def _esik(args: str) -> str:
+    """Esigi (context yuzdesi) veya kademe listesini ayarlar; argumansiz ayari gosterir."""
+    a = (args or "").strip()
+    if not a:
+        return _cli("ayar")
+    if "," in a:
+        return _cli("ayar", "kademe", a) + "\n\n" + _cli("ayar")
+    return _cli("ayar", "esik", a) + "\n\n" + _cli("ayar")
+
+
+def _ara(args: str) -> str:
+    """Arsivde arama: 'index' depoyu tazeler, 6 haneli ID ile tek pakette, aksi halde tum arsivde."""
+    a = (args or "").strip()
+    if not a:
+        return "Kullanim: /czipara \"<sorgu>\"   |   /czipara <ID> \"<sorgu>\"   |   /czipara index"
+    parca = a.split()
+    if parca[0].lower() == "index":
+        return _cli("index")
+    if len(parca) > 1 and len(parca[0]) == 6 and parca[0].isalnum():
+        return _cli("search", *parca)
+    return _cli("asearch", *parca)
+
+
+def _gorev(args: str) -> str:
+    """Kayitli promt/plan deposu: /czipgorev listele [--tip=plan] | /czipgorev oku <kid|son>."""
+    a = (args or "listele").strip()
+    return _cli("gorev", *a.split())
+
+
+
+def _promt_plan(args: str, tip: str) -> str:
+    """Depo komutlarini calistirir; ham gorev verilirse akisi skill'e yonlendirir."""
+    a = (args or "").strip()
+    ilk = a.split()[0].lower() if a else ""
+    if ilk in ("oku", "listele"):
+        parca = a.split()
+        if ilk == "listele" and not any(x.startswith("--tip") for x in parca):
+            parca.append("--tip=" + tip)
+        return _cli("gorev", *parca)
+    return ("Bu akis model karari ister (ham gorev -> " + tip + " -> onay -> kayit).\n"
+            "Komut yerine mesaj olarak yaz:  czip " + tip + " <ham gorev metni>\n"
+            "Depo komutlari: /czip_" + tip + " listele   |   /czip_" + tip + " oku <kid|son>")
+
+
+
+_YARDIM = """📦 czip — oturum paketleme ve arşiv komutları
+
+PAKETLE
+  /czip [son|aktif|<id>|<dosya>] [--oto] [--oto-pasif] [--jev] [--eksiksiz]
+      Oturumu .hkp paketine sıkıştırır. --oto: aynı işi yapan oturumları da
+      aynı pakete alır. --oto-pasif: kaynakları ayrıca pasife alır.
+      --jev: büyük araç çıktılarını karar kapısına sorar (motor: Laya, yerel).
+      --eksiksiz: kayıpsız mod (kırpma ve budama yok).
+
+OKU (paketi açmadan)
+  /czip_ex [<paket|ID|son>] [bas-bit]     (/czipex, /cunzip aynı işi yapar)
+      Harita + son iletiler; aralık verirsen o iletilerin tam metni.
+
+ARA
+  /czip_search "<sorgu>"          tüm arşivde ara      (/czipara)
+  /czip_search <ID> "<sorgu>"     tek pakette ara
+  /czip_search index              arşiv indeksini tazele
+
+BİRLEŞTİR
+  /czip_merge [bak|oto|<id1> <id2> ...] [--jev] [--gun=7]      (/czipmerge)
+      Aynı işi yapan oturumları tek pakete alır; kararı karar kapısı verir.
+
+OTOMATİK MOD
+  /czip_auto [on|off|durum]       (/czipauto)   eşiği geçince sormadan paketler
+  /czip_esik [50 | 50,75,90]      (/czipesik)   eşik = context penceresinin yüzdesi
+
+GÖREV DEPOSU (kalıcı promt/plan)
+  czip promt <ham görev>          mesaj olarak yaz → prompta çevirir, onay alır, kaydeder
+  czip plan  <ham görev>          aynısı ama önce keşfedip adım adım plan çıkarır
+  /czip_promt listele | oku <kid|son>          kayıtlı promtlar
+  /czip_plan  listele | oku <kid|son>          kayıtlı planlar
+  /czip_gorev listele [--tip=plan|promt]       hepsi tek listede
+
+NOTLAR
+  • Paketin tamamı asla bağlama yüklenmez; oku/ara/aralık ile parça parça okunur.
+  • Kaynak oturumlara dokunulmaz (salt-okuma); --oto-pasif hariç.
+  • Karar kapısı Laya ile yerel çalışır (anahtar istemez); Türkçe içerik node1 ile
+    İngilizceye çevrilip sorulur. CZIP_KARAR_MOTORU=jev ile eski motora dönülür.
+  • Yardım: /czip_help"""
+
+
+def _yardim_metni(args: str = "") -> str:
+    return _YARDIM
+
+
 def register(ctx: Any) -> None:
     """Hermes'e /czip ve /cunzip komutlarini kaydeder."""
     ctx.register_command(
@@ -273,23 +426,110 @@ def register(ctx: Any) -> None:
         args_hint="[son|aktif|<id>] [--oto] [--oto-pasif] [--jev] [--eksiksiz]",
     )
     ctx.register_command(
+        "czip-son",
+        lambda args="": _son(args),
+        description="Pack + archive the session and end it — safe to delete, undo: czip gerial.",
+        args_hint="[<id>]  (default: active session)",
+    )
+    ctx.register_command(
+        "czip_end",
+        lambda args="": _son(args),
+        description="Pack + archive + end (alias of /czip-son).",
+        args_hint="[<id>]  (default: active session)",
+    )
+    # Gateway slash lookup '_' -> '-' normalize eder: /czip_end için tireli kayıt ŞART.
+    ctx.register_command(
+        "czip-end",
+        lambda args="": _son(args),
+        description="Pack + archive + end (alias of /czip-son).",
+        args_hint="[<id>]  (default: active session)",
+    )
+    ctx.register_command(
         "cunzip",
         lambda args="": _okur(args),
-        description="Read a pack WITHOUT unpacking: map + last messages + requested range.",
-        args_hint="<paket.hkp> [bas-bit]",
+        description="(alias) /czip_ex",
+        args_hint="<takma ad — /czip_ex>",
     )
     ctx.register_command(
         "czipmerge",
         lambda args="": _birlestir(args),
-        description="Merge 2+ sessions doing the same job into ONE .hkp pack (gated by a Jev verdict).",
-        args_hint="[bak|oto|<id1> <id2> ...] [--jev] [--eksiksiz] [--gun=7]",
+        description="(alias) /czip_merge",
+        args_hint="<takma ad — /czip_merge>",
+    )
+    ctx.register_command(
+        "czipauto",
+        lambda args="": _auto(args),
+        description="(alias) /czip_auto",
+        args_hint="<takma ad — /czip_auto>",
+    )
+    ctx.register_command(
+        "czipesik",
+        lambda args="": _esik(args),
+        description="(alias) /czip_esik",
+        args_hint="<takma ad — /czip_esik>",
+    )
+    ctx.register_command(
+        "czipara",
+        lambda args="": _ara(args),
+        description="(alias) /czip_search",
+        args_hint="<takma ad — /czip_search>",
+    )
+    ctx.register_command(
+        "czipgorev",
+        lambda args="": _gorev(args),
+        description="(alias) /czip_gorev",
+        args_hint="<takma ad — /czip_gorev>",
+    )
+    ctx.register_command("czip_help", lambda args="": _yardim_metni(args),
+                         description="List every czip command with one-line usage.", args_hint="")
+    for _ad in ("cziphelp", "czipyardim"):
+        ctx.register_command(
+            _ad,
+            lambda args="": _yardim_metni(args),
+            description="(alias) /czip_help",
+            args_hint="<takma ad — /czip_help>",
+        )
+    # Claude Code'daki adlar (alt cizgili) Telegram/CLI'da da calissin — ayni islevler.
+    for _ad, _fn, _ac, _ip in (
+        ("czip_auto", _auto, "Turn automatic packing on/off (alias of /czipauto).", "[on|off|durum]"),
+        ("czip_esik", _esik, "Set the auto-pack threshold (alias of /czipesik).", "[50 | 50,75,90]"),
+        ("czip_search", _ara, "Search the pack archive (alias of /czipara).", "[\"<sorgu>\"] | <ID> \"<sorgu>\" | index"),
+        ("czip_ex", _okur, "Read a pack without unpacking (alias of /czipex).", "[<paket.hkp|ID|son>] [bas-bit]"),
+        ("czip_merge", _birlestir, "Merge same-job sessions (alias of /czipmerge).", "[bak|oto|<id1> <id2> ...]"),
+        ("czip_gorev", _gorev, "Saved prompt/plan store (alias of /czipgorev).", "listele [--tip=plan|promt] | oku <kid|son>"),
+    ):
+        ctx.register_command(_ad, (lambda f: lambda args="": f(args))(_fn), description=_ac, args_hint=_ip)
+    # Gateway slash lookup '_' -> '-' normalize eder; tireli formlar da kayitli olsun (Telegram /czip_auto fix).
+    for _ad, _fn, _ac, _ip in (
+        ("czip-auto", _auto, "Turn automatic packing on/off.", "[on|off|durum]"),
+        ("czip-esik", _esik, "Set the auto-pack threshold.", "[50 | 50,75,90]"),
+        ("czip-search", _ara, "Search the pack archive.", "[\"<sorgu>\"] | <ID> \"<sorgu>\" | index"),
+        ("czip-ex", _okur, "Read a pack without unpacking.", "[<paket.hkp|ID|son>] [bas-bit]"),
+        ("czip-merge", _birlestir, "Merge same-job sessions.", "[bak|oto|<id1> <id2> ...]"),
+        ("czip-gorev", _gorev, "Saved prompt/plan store.", "listele [--tip=plan|promt] | oku <kid|son>"),
+        ("czip-help", _yardim_metni, "List every czip command with one-line usage.", ""),
+        ("czip-promt", lambda a="": _promt_plan(a, "promt"), "Saved prompt store.", "listele | oku <kid|son>"),
+        ("czip-plan", lambda a="": _promt_plan(a, "plan"), "Saved plan store.", "listele | oku <kid|son>"),
+    ):
+        ctx.register_command(_ad, (lambda f: lambda args="": f(args))(_fn), description=_ac, args_hint=_ip)
+    ctx.register_command(
+        "czip_promt",
+        lambda args="": _promt_plan(args, "promt"),
+        description="Saved prompt store; the convert-and-approve flow runs as a message (czip promt ...).",
+        args_hint="listele | oku <kid|son>",
+    )
+    ctx.register_command(
+        "czip_plan",
+        lambda args="": _promt_plan(args, "plan"),
+        description="Saved plan store; the convert-and-approve flow runs as a message (czip plan ...).",
+        args_hint="listele | oku <kid|son>",
     )
     # /czip yazinca hepsi cikacak diye ortak onek; eski adlar da calismaya devam eder.
     ctx.register_command(
         "czipex",
         lambda args="": _okur(args),
-        description="Expand/read a pack — via RAG, without loading the full dump.",
-        args_hint="<paket.hkp|ID|son> [bas-bit]",
+        description="(alias) /czip_ex",
+        args_hint="<takma ad — /czip_ex>",
     )
     # cunzip zaten yukarida kayitli; yalniz cmerge'in eski adi koprulenir.
     for _eski, _fn, _ip in (("cmerge", _birlestir, "[bak|oto|<id1> <id2> ...]"),):

@@ -124,8 +124,7 @@ def adaylari_bul(gun=7, en_fazla=40):
 
 def _jev_ayni_is(ciftler, timeout=25):
     """Her aday cifti Jev'e sorar. Doner: ({(sid_a,sid_b): noul}, bilgi)."""
-    key = hkp._jev_anahtar()
-    if not key:
+    if hkp.KARAR_MOTORU != "laya" and not hkp._jev_anahtar():
         return {}, {"hata": "anahtar_yok"}
     durum = ("Merging Hermes agent sessions. Decide whether two sessions are the "
              "SAME ongoing piece of work (so their transcripts should live in one "
@@ -142,11 +141,13 @@ def _jev_ayni_is(ciftler, timeout=25):
             "into one session would help rather than confuse the reader?"
         ).format(a["baslik"][:120], a["ozet"], b["baslik"][:120], b["ozet"], skor)
     try:
-        noullar = hkp._jev_batch(key, durum, sorular, timeout)
+        noullar, motor = hkp.karar_batch(durum, sorular, timeout)
     except ValueError as e:
         return {}, {"hata": str(e)}
-    return ({esleme[q]: n for q, n in noullar.items() if q in esleme},
-            {"soru": len(sorular), "cevap": len(noullar)})
+    guven = getattr(hkp, "_laya_guven", {}) or {}
+    dusuk = {q for q, g in guven.items() if g < getattr(hkp, "LAYA_MIN_GUVEN", 0.30)}
+    return ({esleme[q]: n for q, n in noullar.items() if q in esleme and q not in dusuk},
+            {"soru": len(sorular), "cevap": len(noullar), "motor": motor, "dusuk_guven": len(dusuk)})
 
 
 def gruplari_kur(ciftler, jev=False):
@@ -164,7 +165,7 @@ def gruplari_kur(ciftler, jev=False):
         noul = noullar.get(anahtar)
         if noul is not None:
             kabul = noul >= JEV_BIRLESTIR
-            kaynak = "jev"
+            kaynak = (jbilgi or {}).get("motor", "jev")
             deger = noul
         else:
             kabul = skor >= YEREL_BIRLESTIR
@@ -220,6 +221,19 @@ def oturumlari_birlestir(sidler):
     for s in sidler:
         sid, mesajlar, baslik = hkp.oturum_oku(s)
         kaynaklar.append({"sid": sid, "mesaj": mesajlar, "baslik": baslik or sid})
+    return kaynaklari_birlestir(kaynaklar)
+
+
+def kaynaklari_birlestir(kaynaklar):
+    """Yuklenmis kaynaklari tek akisa cevirir: [{sid, mesaj, baslik}, ...].
+
+    oturumlari_birlestir() bunun state.db'den okuyan sarmalayicisidir. Ayrilma
+    sebebi: Hermes disindaki dokumler (or. Claude Code oturum disa aktarimi)
+    state.db'de yoktur ama ayni birlestirme kurallarini hak eder — sinir
+    isaretleri, zaman sirasi ve oturumlar arasi birebir tekrar ayiklama.
+    """
+    if len(kaynaklar) < 2:
+        raise ValueError("birlestirme icin en az 2 kaynak gerekir")
     # en cok iletisi olan oturumun basligi birlesik pakete ad olur
     ana = max(kaynaklar, key=lambda k: len(k["mesaj"]))
 
@@ -237,7 +251,8 @@ def oturumlari_birlestir(sidler):
         if k["sid"] != onceki_sid:
             cikti.append({
                 "role": "system",
-                "content": "── OTURUM SINIRI: {} ({}) ──".format(
+                "content": hkp.T("── SESSION BOUNDARY: {} ({}) ──",
+                                 "── OTURUM SINIRI: {} ({}) ──").format(
                     k["baslik"], k["sid"]),
             })
             onceki_sid = k["sid"]

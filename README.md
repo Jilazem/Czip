@@ -58,6 +58,15 @@ control **2/16**. These are synthetic runs of one model and one task template;
 summary and full history were not tested at the larger size. The model's
 native token count for those larger histories was not available.
 
+## What's new (October 2026)
+
+- **Task store (`czip promt` / `czip plan`)** — turn a raw task into a runnable prompt, get it approved, and save it as a tiny `.hkp` pack. Next session: `/czip_promt oku <kid>` brings it back for free. CLI: `hkp.py gorev kaydet|oku|listele` (`gorev.py`). Slash-command recipes live in [`commands/`](commands/).
+- **Auto mode (`czip-auto`)** — `plugins-extra/czip-auto` packs long, finished sessions in the background when a new session starts (every 30 min, `CZIP_AUTO_ARALIK`). Engine: `czip_auto.py`; thresholds via `/czip_esik`.
+- **`czip-promt` Hermes plugin** (`plugins-extra/czip-promt`) — always-on context + gateway rewrite so `czip promt <task>` works in every channel, Telegram included. When a specialist/profile is assigned work, the task definition is saved first and the assignment body is just `czip promt oku <kid>`.
+- **KVKK/PII layer (`kvkk.py`)** — personal data in a pack is tokenised and encrypted; external decision gates ask first.
+- **Search & merge upgrades** — hybrid search index (`depo.py`), safer session merge (`birlestir.py`), `ccd_dokum.py` for Claude Code transcripts, local decision gate (`laya_kapi.py`, optional; set `CZIP_KARAR_MOTORU`).
+- Paths are overridable: `CZIP_HKP`, `CZIP_PYTHON`, `CZIP_PAKET_DIZIN`, `CZIP_AUTO_SCRIPT`, `HERMES_HOME`.
+
 ## v3 — the read cost was the real bottleneck
 
 Compression ratio turned out to be the wrong metric: the pack file never

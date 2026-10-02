@@ -1,0 +1,7 @@
+name: czip-promt
+version: "1.0.0"
+description: "Ponytail yerine: her turda czip-promt görev akışı bağlamı; /czip_promt ve 'czip promt <görev>' mesajlarını (Telegram dahil) ajan promtuna çevirir."
+author: "Gökhan Uzman (Hermes)"
+provides_hooks:
+  - pre_llm_call
+  - pre_gateway_dispatch

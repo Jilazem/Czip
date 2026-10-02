@@ -39,6 +39,15 @@ AI sonra yalnızca ihtiyacı olan aralığı `ara` → `aralik` ile çeker.
   Kazanç dilde değil, **JSON töreninde**: son iletleri `A> metin` biçimine
   çevirmek %47 kazandırdı.
 
+## Yenilikler (Ekim 2026)
+
+- **Görev deposu (`czip promt` / `czip plan`)** — ham görevi çalıştırılabilir prompta çevirir, onay alır, küçük bir `.hkp` olarak kaydeder. Sonraki oturumda `/czip_promt oku <kid>` ile geri gelir. CLI: `hkp.py gorev kaydet|oku|listele` (`gorev.py`). Komut tarifleri [`commands/`](commands/) altında.
+- **Otomatik mod (`czip-auto`)** — `plugins-extra/czip-auto`, yeni oturum başlarken uzun ve kapanmış oturumları arka planda paketler (30 dk aralık, `CZIP_AUTO_ARALIK`). Motor: `czip_auto.py`; eşik `/czip_esik`.
+- **`czip-promt` Hermes eklentisi** (`plugins-extra/czip-promt`) — her turda bağlam + gateway yeniden yazımı; `czip promt <görev>` Telegram dahil her kanalda çalışır. Uzmana görev atarken tanım önce kaydedilir, atama gövdesi yalnızca `czip promt oku <kid>` olur.
+- **KVKK katmanı (`kvkk.py`)** — paketteki kişisel veriler tokenlanıp şifrelenir; dışarı giden kararlarda önce sorulur.
+- **Arama ve birleştirme** — hibrit indeks (`depo.py`), daha güvenli oturum birleştirme (`birlestir.py`), Claude Code dökümü için `ccd_dokum.py`, yerel karar kapısı `laya_kapi.py` (isteğe bağlı; `CZIP_KARAR_MOTORU`).
+- Yollar değiştirilebilir: `CZIP_HKP`, `CZIP_PYTHON`, `CZIP_PAKET_DIZIN`, `CZIP_AUTO_SCRIPT`, `HERMES_HOME`.
+
 ## v3 — tekrar ayıklama
 
 Ölçüm: araç çıktıları paketin **%71'i**, ve bunların **%78'i birebir tekrar**

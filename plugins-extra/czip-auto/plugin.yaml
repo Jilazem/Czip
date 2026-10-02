@@ -1,0 +1,6 @@
+name: czip-auto
+version: "1.0.0"
+description: "Yeni oturum baslarken uzun+kapanmis oturumlari arka planda otomatik paketler (czip_auto.py)."
+author: "Gökhan Uzman (Hermes)"
+hooks:
+  - on_session_start
