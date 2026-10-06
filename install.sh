@@ -8,7 +8,7 @@ PY="$(command -v python3 || command -v python)"
 
 # 1) terminal girisi (yuklenen komut repo motorunu gosterir)
 mkdir -p "$HOME/.local/bin"
-printf '#!/bin/sh\nexec "%s" "%s/hkp.py" "$@"\n' "$PY" "$KOK" > "$HOME/.local/bin/czip"
+printf '#!/bin/sh\nexec "%s" "%s/czip_cli.py" "$@"\n' "$PY" "$KOK" > "$HOME/.local/bin/czip"
 chmod +x "$HOME/.local/bin/czip" "$KOK/czip"
 
 # 2) plugin

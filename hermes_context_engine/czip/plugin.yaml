@@ -1,0 +1,3 @@
+name: czip
+version: 0.2.0
+description: "Archive removed context before compaction; retrieve with czip_search, czip_range, czip_map and czip_find."

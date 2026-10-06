@@ -191,3 +191,17 @@ MIT
 
 2026-09-20 öncesi sürümler MIT altında yayımlanmıştı; o sürümlerin MIT
 hakları saklıdır.
+# 6 Ekim 2026 geliştirmesi
+
+İsteğe bağlı [Hermes bağlam motoru ve iş/kaynak araması](hermes_context_engine/README.md)
+eklendi. Sıkıştırmada çıkarılan iletiler önce arşivlenir; kayıt başarısızsa mevcut
+bağlam korunur. Tekrarlanan kullanıcı istekleri ve oturum devam bağlantıları
+saklanır; uzun metinler özgün boşluklarıyla sayfalı okunur.
+
+`czip find`, `find-index` ve açıkça seçilen `find-drive` komutları yerel SQLite
+indeksinde plan, Kanban, doğrulanmış arşiv haritası ve isteğe bağlı Drive dosya
+adlarını tarar. Türkçe arama, kaynak özeti ve eski/kısmi kapsam bilgisi döner.
+Windows'ta `czip.cmd` veya `python czip_cli.py` kullanılabilir. Motoru etkinleştirme
+adımları bağlantıdaki belgede yer alır; kurulması açık masaüstü oturumuna otomatik
+yüklenmesini garanti etmez. Paket üretmek çalışan sohbetin bağlamını sıfırlamaz.
+Ham kayıtlar ve varsayılan paketler şifresizdir; kişisel oturumları Git'e eklemeyin.

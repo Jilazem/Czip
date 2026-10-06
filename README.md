@@ -1,5 +1,12 @@
 # czip — infinite context, without an infinite context window
 
+**October 6 update:** optional [Hermes context engine and job/source search](hermes_context_engine/README.md)
+now archives removed messages before compaction, preserves repeated requests and
+continuation aliases, and provides exact paged reads plus cross-session job search.
+`czip find`, `find-index` and opt-in `find-drive` use a local, evidence-bearing
+SQLite index with Turkish folding. Windows and POSIX launchers are included;
+activation is explicit and does not restart an existing service.
+
 > 🌍 English (primary) · [Türkçe](README_tr.md)
 
 When you carry a long agent session into a new chat, the entire history

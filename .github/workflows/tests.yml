@@ -1,0 +1,16 @@
+name: Portable Czip tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -X utf8 -m unittest discover -s tests -v
+      - run: python -X utf8 tests/test_roundtrip.py
