@@ -1,0 +1,6 @@
+# Optional resident service, tested on Apple Silicon / Python 3.12.
+sentence-transformers==6.1.0
+transformers==5.19.0
+torch==2.14.1
+torchvision==0.29.1
+pillow==12.3.0

@@ -7,6 +7,10 @@ continuation aliases, and provides exact paged reads plus cross-session job sear
 SQLite index with Turkish folding. Windows and POSIX launchers are included;
 activation is explicit and does not restart an existing service.
 
+Optional [local EmbeddingGemma 2 search](EMBEDDINGS.md) combines semantic candidates
+with keyword results, preserves exact case filters and source hashes, and retains
+keyword search when the resident model service is unavailable.
+
 > 🌍 English (primary) · [Türkçe](README_tr.md)
 
 When you carry a long agent session into a new chat, the entire history

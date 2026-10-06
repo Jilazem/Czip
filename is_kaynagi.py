@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Czip job/source retrieval: incremental local FTS, explicit evidence and coverage."""
 from __future__ import annotations
-import argparse, contextlib, hashlib, json, os, pathlib, re, sqlite3, subprocess, shutil, time, unicodedata
+import argparse, contextlib, hashlib, json, os, pathlib, re, sqlite3, subprocess, shutil, time, unicodedata, importlib.util
 
 HOME=pathlib.Path(os.environ.get('CZIP_HERMES_ROOT',os.environ.get('HERMES_HOME','~/.hermes'))).expanduser()
 SYSTEM=pathlib.Path(os.environ.get('CZIP_SYSTEM_ROOT',str(HOME/'system'))).expanduser()
@@ -73,7 +73,53 @@ class JobIndex:
   with self.writer() as d:
    old=d.execute('select value from meta where key=?',(kind,)).fetchone();value=json.loads(old[0]) if old else {'at':None,'count':0}
    value.update(error=safe(error)[:180],failed_at=time.time(),stale=True);d.execute('insert or replace into meta values(?,?)',(kind,dump(value)))
- def search(self,query,limit=8,kind=None,case=None):
+ def _semantic(self,query,limit,kind,case):
+  spec=importlib.util.spec_from_file_location('czip_semantic_client',pathlib.Path(__file__).with_name('semantic_client.py'))
+  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  return module.search(query,limit,kind,case,config_path=os.environ.get('CZIP_SEMANTIC_CONFIG',str(HOME/'runtime/czip-is-kaynagi/semantic.json')))
+ def search(self,query,limit=8,kind=None,case=None,use_semantic=True):
+  started=time.perf_counter();limit=max(1,min(int(limit),20))
+  inferred=metadata(query)['esaslar'];exact_case=case or (inferred[0] if len(inferred)==1 else None)
+  result=self._search_lexical(query,limit,kind,exact_case)
+  tokens=terms(query);numeric={w for w in tokens if w.isdigit()}
+  # Do not loosen arbitrary numeric constraints through vector similarity.
+  allowed=set(re.findall(r'\d+',exact_case or ''))
+  if not use_semantic or not tokens or (numeric and not numeric.issubset(allowed)) or result['status']=='index_missing':return result
+  try:semantic=self._semantic(query,40,kind,exact_case)
+  except Exception as error:semantic={'status':'unavailable','hits':[],'reason':type(error).__name__}
+  result['semantic']={k:semantic[k] for k in ['status','model','revision','dimension','device','coverage','elapsed_ms','reason'] if k in semantic}
+  if not semantic.get('hits'):return result
+  candidates={};scores={};origins={}
+  def add(hit,rank,origin,weight):
+   key=hit['source'];candidates.setdefault(key,hit);scores[key]=scores.get(key,0)+weight/(60+rank);origins.setdefault(key,set()).add(origin)
+  for rank,hit in enumerate(result['hits'],1):add(hit,rank,'keyword',1)
+  accepted=0
+  with contextlib.closing(read_only(self.path)) as db:
+   for rank,item in enumerate(semantic['hits'][:40],1):
+    if not isinstance(item,dict) or not isinstance(item.get('key'),str):continue
+    row=db.execute('select * from sources where key=?',(item['key'],)).fetchone()
+    if not row or row['sha256']!=item.get('source_sha') or (kind and row['kind']!=kind):continue
+    meta=json.loads(row['metadata'])
+    if exact_case and exact_case not in meta.get('esaslar',[]):continue
+    # Candidates always cite the current source, never stale embedding payload text.
+    visible={k:v for k,v in meta.items() if k in {'esaslar','mahkeme','kart_id','status','assignee','plan_sources','dosya_kokleri','path','line','end_line','session_id','profile','package','scope','group'} and v is not None}
+    for field in ['dosya_kokleri','plan_sources','esaslar','mahkeme']:
+     if field in visible:visible[field]=visible[field][:3]
+    start=max(0,min(int(item.get('start') or 0),len(row['text'])))
+    hit={'source':row['key'],'kind':row['kind'],'title':row['title'],'snippet':row['text'][start:start+500],'metadata':visible,'source_sha256':meta.get('source_sha256'),'indexed_at':row['updated'],'semantic_similarity':item.get('score'),'score_kind':'RRF: BM25 + local EmbeddingGemma','evidence_claim':'retrieval candidate; read cited source; artifact existence and delivery need separate verification'}
+    if row['key'] in candidates:candidates[row['key']]['semantic_similarity']=item.get('score')
+    add(hit,rank,'semantic',.8);accepted+=1
+  if not accepted:return result
+  hits=[];groups=set()
+  for key in sorted(scores,key=lambda k:-scores[k]):
+   hit=candidates[key];group=hit['metadata'].get('group') or key
+   if group in groups:continue
+   groups.add(group);hit['retrieval']=sorted(origins[key]);hits.append(hit)
+   if len(hits)>=limit:break
+  result.update(hits=hits,status='found',match='hybrid',semantic_embedding=True,elapsed_ms=round((time.perf_counter()-started)*1000,3))
+  result['next']='Read cited source first. Semantic similarity and indexed status are not artifact/delivery evidence.'
+  return result
+ def _search_lexical(self,query,limit=8,kind=None,case=None):
   started=time.perf_counter();tokens=terms(query);limit=max(1,min(int(limit),20))
   if not self.path.exists():return {'status':'index_missing','hits':[],'next':'Run czip find-index; an empty current-session archive is unrelated.'}
   d=sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro',uri=True,timeout=3);d.row_factory=sqlite3.Row

@@ -79,8 +79,9 @@ python czip_cli.py find-drive --remote 'your-remote:your-folder'
 On Windows use `czip.cmd`, or invoke `python czip_cli.py` directly. On POSIX use
 `./czip` or the installed `czip` command. Drive refresh updates the names cache;
 run `find-index` afterward to index it. Listing has depth 4 and reports incomplete
-coverage; it does not read remote file bodies. No embeddings or external LLM are
-used by this retrieval index.
+coverage; it does not read remote file bodies. The default retrieval is lexical;
+an optional [local EmbeddingGemma service](../EMBEDDINGS.md) adds semantic ranking
+without an external model API.
 
 The engine exposes `czip_search`, `czip_range`, `czip_map` for the current archive,
 and `czip_find` for indexed jobs across sessions. An empty session archive directs

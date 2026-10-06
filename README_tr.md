@@ -1,4 +1,8 @@
 # czip — oturumunu taşı, bağlamını değil
+
+İsteğe bağlı [yerel EmbeddingGemma 2 araması](EMBEDDINGS.md) eklendi. Aynı cihazdaki
+bellekte hazır model, anahtar kelime sonuçlarına anlamsal adaylar ekler. Esas no
+ve kaynak hash denetimi korunur; hizmet erişilemezse anahtar kelime araması sürer.
 > 🇬🇧 English version (primary): [README.md](README.md)
 
 Uzun bir Hermes sohbetini yeni oturuma taşıdığında tüm geçmiş bağlama
