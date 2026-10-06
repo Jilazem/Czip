@@ -30,6 +30,16 @@ def write_from_process(folder, value):
  for i in range(5):e._czip_store([{'role':'user','content':value+str(i)}])
 
 class RegressionTests(unittest.TestCase):
+ def test_host_reload_keeps_engine_cap_and_smaller_host_cap(self):
+  seen=[];previous=getattr(ContextCompressor,'_apply_threshold_tokens_cap',None)
+  ContextCompressor._apply_threshold_tokens_cap=lambda engine:seen.append(engine.threshold_tokens_cap)
+  try:
+   e=self.engine('cap');e._czip_fixed_threshold=190000;e.threshold_tokens_cap=200000;e._apply_threshold_tokens_cap()
+   self.assertEqual(seen[-1],190000);self.assertEqual(e.threshold_tokens_cap,200000)
+   e.threshold_tokens_cap=100000;e._apply_threshold_tokens_cap();self.assertEqual(seen[-1],100000)
+  finally:
+   if previous is None:del ContextCompressor._apply_threshold_tokens_cap
+   else:ContextCompressor._apply_threshold_tokens_cap=previous
  def engine(self,sid):
   e=mod.CzipContextEngine();e.on_session_start(sid);return e
  def test_quote_is_not_a_summary(self):

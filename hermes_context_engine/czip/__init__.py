@@ -221,6 +221,23 @@ class CzipContextEngine(ContextCompressor):
     def clone_for_agent(self):
         return CzipContextEngine()
 
+    def _apply_threshold_tokens_cap(self):
+        """Keep the engine cap when the host hot-reloads its fallback cap.
+
+        The host owns compression.*; this engine owns czip_context.*. The
+        superclass still derives the window/output-budget percentage first.
+        """
+        own = getattr(self, '_czip_fixed_threshold', None)
+        host = getattr(self, 'threshold_tokens_cap', None)
+        try:
+            if own:
+                self.threshold_tokens_cap = min(int(own), int(host)) if host else int(own)
+            parent = getattr(super(), '_apply_threshold_tokens_cap', None)
+            if parent:
+                parent()
+        finally:
+            self.threshold_tokens_cap = host
+
     def update_model(self, *args, **kwargs) -> None:
         super().update_model(*args, **kwargs)
         # Older Hermes has no threshold_tokens_cap: apply the absolute cap here.

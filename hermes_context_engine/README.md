@@ -30,6 +30,27 @@ czip_context:
   mode: hybrid  # native LLM summary plus archive; map skips the summary call
 ```
 
+For a verified 262,144-token local route, an optional policy is:
+
+```yaml
+compression:
+  threshold: 0.85
+  threshold_tokens: 200000  # fallback upper cap; output reservation may lower it
+czip_context:
+  mode: map
+  threshold_percent: 0.85
+  threshold_tokens: 190000
+```
+
+The effective trigger is the smaller of the percentage-derived budget and its
+absolute cap. Setting only the absolute number while retaining a 40% threshold
+will still trigger early. The engine keeps its own lower cap even when the host
+hot-reloads `compression.threshold_tokens`; small-window safety remains in the
+native derivation. Config changes do not replace an old engine instance or reload
+its Python class. Check actual activation on your desktop before assuming a new
+mode/cap is live. `map` skips the summary LLM and relies on source retrieval; this
+changes how the handoff is read, not the retention of the original messages.
+
 Start a new session or use your Hermes version's supported reload mechanism.
 Verify plugin discovery, active engine and a real compaction; a copied file is
 not proof that an already-running desktop process loaded it.
