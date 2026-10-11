@@ -500,8 +500,42 @@ def tam_ilet(k, sozluk, reasoning=True):
 
 
 # ------------------------------------------------------------- yuksuk seviye
+_GIZLI_KALIPLAR = [re.compile(x) for x in (
+    r"sk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}",
+    r"(?:ghp|gho|ghs|ghu)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}",
+    r"xox[abprs]-[A-Za-z0-9\-]{10,}",
+    r"AKIA[0-9A-Z]{16}",
+    r"AIza[0-9A-Za-z_\-]{35}",
+    r"[a-z]{3,12}_(?:llm|plt|live|prod|api)_[A-Za-z0-9_\-]{24,}",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+)]
+_GIZLI_ATAMA = re.compile(
+    r"(?i)((?:api[_-]?key|secret|token|password|parola|şifre|sifre)[\"']?\s*[:=]\s*[\"']?)"
+    r"([A-Za-z0-9_\-./+]{16,})")
+
+
+def gizli_maskele(metin):
+    """API anahtari / token / sifre degerlerini [GIZLI] ile degistirir. Paket paylasilabilir
+    olsun diye sikistir() varsayilan olarak uygular; kaynak oturum dosyasi degismez."""
+    if not isinstance(metin, str) or not metin:
+        return metin
+    for k in _GIZLI_KALIPLAR:
+        metin = k.sub("[GIZLI]", metin)
+    return _GIZLI_ATAMA.sub(lambda m: m.group(1) + "[GIZLI]", metin)
+
+
+def _maskele_derin(v):
+    if isinstance(v, str):
+        return gizli_maskele(v)
+    if isinstance(v, list):
+        return [_maskele_derin(x) for x in v]
+    if isinstance(v, dict):
+        return {a: _maskele_derin(b) for a, b in v.items()}
+    return v
+
+
 def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
-             baslik=None, kaynak_bayt=None, jev=False):
+             baslik=None, kaynak_bayt=None, jev=False, maskele=True):
     """Mesaj listesi -> .hkp paketi. Sozluk doner (hata durumunda 'hata' anahtari).
     jev=True: 'akilli' modda buyuk arac ciktilarini Jev'e toplu sor; olu olanlar
     paketten cikarilir (iz birakarak), gerekenler OLDUGU GIBI kalir, ortalar statik
@@ -515,6 +549,8 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
         for a in ("c", "e", "e2"):
             if a in k:
                 k[a] = bosluk_temizle(k[a])
+        if maskele:
+            k = _maskele_derin(k)
         kayitlar.append(k)
     eksikler = []
     jev_bilgi = None
