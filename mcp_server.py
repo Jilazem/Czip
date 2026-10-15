@@ -19,20 +19,17 @@ mcp = FastMCP("oturum-sikistirici")
 
 
 @ mcp.tool()
-def sikistir(girdi: str, cikti: str, mod: str = "akilli",
+def sikistir(girdi: str, cikti: str, mod: str = "eksiksiz",
              arac_bas: int = 2000, arac_son: int = 2000, jev: bool = False) -> str:
-    """Hermes oturum dosyasini/listesini HKP1'e sikistirir.
+    """Pack a transcript / Bir dökümü paketle. Default: lossless / Varsayılan: eksiksiz.
 
-    girdi:  dosya yolu (.json/.jsonl) veya iletilerin JSON/metni
-    cikti:  .hkp cikis yolu (uzanti otomatik eklenir)
-    mod:    'akilli' (varsayilan) = icerik tam, tasima iletisindeki gereksiz tekrar
-            silinir (bosluk, satir tekrar, sozluk, null'lar, reasoning ikizi);
-            'eksiksiz' = her bayt geri doner, hicbir kirpma yok.
-    arac_bas/son: akilli modda arac icerigi bas/son dilim baytlari (0 = kirpma).
-    jev:    True = akilli modda buyuk arac ciktilarini Jev'e (System-One) toplu sor;
-            olu olanlar paketten cikarilir (izli marker), gerekenler OLDUGU GIBI
-            kalir, ortalar statik dilime duser. Jev erisilemezse statik dilime doner.
-    Doner: yol, bayt, oran, mesaj sayisi, sozluk, eksik bildirimi, jev raporu, parca sayisi."""
+    girdi: JSON/JSONL path or message JSON / dosya yolu veya ileti JSON'u.
+    cikti: explicit output path / açık çıktı yolu. mod: eksiksiz|akilli (full|smart).
+    jev is the compatibility name for an optional LOCAL Clef gate, used only in
+    smart mode. No remote fallback / jev yalnız akıllı moddaki yerel Clef kapısıdır.
+    Smart mode can trim content / Akıllı mod içerik kırpabilir; inspect eksik/jev.
+    Source is preserved / Kaynak korunur.
+    """
     try:
         kaynak_bayt = None
         if isinstance(girdi, str) and os.path.isfile(os.path.expanduser(girdi.strip())):
@@ -40,6 +37,7 @@ def sikistir(girdi: str, cikti: str, mod: str = "akilli",
         mesajlar = hkp.girdi_ayristir(girdi)
         if not mesajlar:
             return hkp.hata("girdiden mesaj cikmadi")
+        mod = {"full":"eksiksiz", "smart":"akilli"}.get(mod, mod)
         return json.dumps(hkp.sikistir(mesajlar, cikti, mod, arac_bas, arac_son,
                                        kaynak_bayt=kaynak_bayt, jev=jev), ensure_ascii=False)
     except Exception as e:
@@ -48,7 +46,7 @@ def sikistir(girdi: str, cikti: str, mod: str = "akilli",
 
 @ mcp.tool()
 def iceri_ac(dosya: str, parca: int = 0) -> str:
-    """HKP dosyasini tam metne cevirir (tum sozluk jetonlari cozulur).
+    """Full export (prefer map/range) / HKP dosyasını tam metne çevirir (tum sozluk jetonlari cozulur).
 
     parca: 0 = tum iletler tek JSONL, 1..N = N. parca (40 ilet/parca).
     Buyuk oturumlar icin ONERILEN yol iceri_ac degil, kilavuz + mesajlar'dir
@@ -63,7 +61,7 @@ def iceri_ac(dosya: str, parca: int = 0) -> str:
 
 @ mcp.tool()
 def kilavuz(dosya: str) -> str:
-    """HKP paketini ACAMDAN okuma kilavuzu — yeni oturum icin asil giris noktasidir.
+    """Guide without full export / HKP paketini açmadan okuma kılavuzu — yeni oturum icin asil giris noktasidir.
 
     Tam oturumu context'e yuklemeden kaldigi yerden devam etmeyi saglar:
     - ilet basina TEK SATIR indeks: idx | rol | icerikten 120 karakter (+tc isimleri)
@@ -80,7 +78,7 @@ def kilavuz(dosya: str) -> str:
 
 @ mcp.tool()
 def mesajlar(dosya: str, aralik: str) -> str:
-    """HKP'den secili mesaj araligini TAM metin getirir (paket acilmadan, hedefli okuma).
+    """Exact selected range / HKP'den seçili mesaj aralığını tam metin getirir (paket acilmadan, hedefli okuma).
 
     aralik: '45' tek mesaj, '40-60' aralik (0-tabanli indeks, kilavuz indeksindeki i degeri).
     Azami 80 mesaj/cagri. reasoning/tool_calls/arguments dahildir.
@@ -95,7 +93,7 @@ def mesajlar(dosya: str, aralik: str) -> str:
 
 @ mcp.tool()
 def bilgi(dosya: str) -> str:
-    """HKP ozeti: mesaj/sozluk sayisi, parca sayisi, baytlar, oran, sozluk onizleme."""
+    """Pack metadata / HKP özeti: mesaj/sozluk sayisi, parca sayisi, baytlar, oran, sozluk onizleme."""
     try:
         yol = os.path.expanduser(dosya)
         meta, veri = hkp.paket_oku(yol)
@@ -112,16 +110,21 @@ def bilgi(dosya: str) -> str:
 
 
 @ mcp.tool()
-def oturum_sikistir(session_id: str, cikti: str, mod: str = "akilli",
+def oturum_sikistir(session_id: str, cikti: str, mod: str = "eksiksiz",
                     jev: bool = False) -> str:
-    """Hermes state.db'den oturum okuyup (READ-ONLY) sikistirir — yeni oturuma
-    tasinmasi kolay .hkp uretir.
+    """Pack one explicit Hermes session / Açıkça seçilen tek Hermes oturumunu paketle.
 
-    session_id: 'son' / 'en-uzun' / net ID / benzersiz onek.
-    jev: True = buyuk arac ciktilarini Jev'e sor; oluler paketten cikarilir.
-    Baska bir sey isterseniz once durum_tablosu ile semayi gorun."""
+    session_id: exact ID preferred / tam kimlik tercih edilir. Active selectors
+    require this caller's context / aktif seçim bu çağıranın bağlamını gerektirir.
+    The standalone MCP server has no per-request chat identity: supply an exact
+    ID, never last / Bağımsız MCP sunucusunda sohbet kimliği yoktur; tam kimlik ver.
+    No merging or closing / Birleştirme veya kapatma yok. jev = optional local Clef.
+    """
     try:
+        if session_id in ("son", "last", "latest", "active", "aktif", "current", "en-uzun", "longest"):
+            raise ValueError(hkp.T("MCP requires an explicit session ID", "MCP açık oturum kimliği gerektirir"))
         sid, mesajlar, baslik = hkp.oturum_oku(session_id)
+        mod = {"full":"eksiksiz", "smart":"akilli"}.get(mod, mod)
         sonuc = hkp.sikistir(mesajlar, cikti, mod, baslik=baslik, jev=jev)
         sonuc["session_id"] = sid
         return json.dumps(sonuc, ensure_ascii=False)
@@ -131,7 +134,7 @@ def oturum_sikistir(session_id: str, cikti: str, mod: str = "akilli",
 
 @ mcp.tool()
 def durum_tablosu() -> str:
-    """state.db tablo/kolon/doluluk raporu (salt-okunur, tek sorgu/tablo)."""
+    """Read-only schema / state.db tablo/kolon/doluluk raporu (salt-okunur, tek sorgu/tablo)."""
     try:
         con = hkp._db()
         out = {}
@@ -166,7 +169,7 @@ def durum_tablosu() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 @mcp.tool()
 def hafiza_ara(sorgu: str, limit: int = 8) -> str:
-    """Gecmis TUM oturumlarda ara (uzun sureli hafiza).
+    """Search across archives / Geçmiş tüm oturumlarda ara (uzun sureli hafiza).
 
     Bir isi daha once yapip yapmadigini, nasil cozdugunu, hangi karari neden
     verdigini bulmak icin kullan. Tam metin gerekirse donen paket kimligi ve
@@ -198,7 +201,7 @@ def hafiza_ara(sorgu: str, limit: int = 8) -> str:
 
 @mcp.tool()
 def hafiza_getir(paket: str, aralik: str) -> str:
-    """hafiza_ara'nin bulduğu iletilerin TAM metnini getirir.
+    """Read selected memory range / hafiza_ara'nın bulduğu iletileri getirir.
 
     paket: hafiza_ara'nin dondurdugu paket kimligi
     aralik: "120" veya "118-125" (en fazla 80 ileti)
@@ -215,7 +218,7 @@ def hafiza_getir(paket: str, aralik: str) -> str:
 
 @mcp.tool()
 def hafiza_harita(paket: str) -> str:
-    """Bir paketin RAG haritasi: is tanimlari, arac histogrami, son iletler.
+    """Bounded memory map / Bir paketin RAG haritası: is tanimlari, arac histogrami, son iletler.
 
     Tam dokumu YUKLEMEZ (~1.5k token). Once bunu al, sonra hafiza_getir ile
     yalnizca ihtiyacin olan araligi cek.
@@ -230,7 +233,7 @@ def hafiza_harita(paket: str) -> str:
 
 @mcp.tool()
 def hafiza_guncelle(tam: bool = False) -> str:
-    """Hafiza indeksini yeni paketlerle gunceller (artimli; saniyeler surer)."""
+    """Refresh memory index / Hafıza indeksini yeni paketlerle günceller (artimli; saniyeler surer)."""
     import depo
     try:
         r = depo.guncelle(tam=bool(tam))
@@ -247,7 +250,7 @@ def hafiza_guncelle(tam: bool = False) -> str:
 
 @mcp.tool()
 def hafiza_durum() -> str:
-    """Hafiza deposunun durumu: kac paket, kac ileti, ne kadar yer, ne kadar guncel."""
+    """Memory status / Hafıza deposunun durumu: kac paket, kac ileti, ne kadar yer, ne kadar guncel."""
     import depo
     st = depo.istatistik()
     if not st:

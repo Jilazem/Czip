@@ -24,9 +24,13 @@ import re
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import ayar as _a
+from czip_runtime import T, atomic_json, file_lock, read_json
 
 HERMES_HOME = os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes"))
-STATE_DB = os.path.join(HERMES_HOME, "state.db")
+STATE_DB = os.environ.get("HERMES_STATE_DB") or os.path.join(HERMES_HOME, "state.db")
 ENV_YOLU = os.path.join(HERMES_HOME, ".env")
 CONFIG_YOLU = os.path.join(HERMES_HOME, "config.yaml")
 DURUM_YOLU = os.path.join(HERMES_HOME, "czip", "nobetci.json")
@@ -38,37 +42,18 @@ ESİK_TOKEN = int(os.environ.get("CZIP_ESİK_TOKEN", "150000"))   # mutlak eşik
 # (`czip ayar esik 50`, `czip ayar kademe 50,75,90`, `czip auto on`).
 # Ayar dosyası okunamazsa eski davranışa düşülür — nöbetçi asla susmaz.
 def _ayar():
-    varsayilan = {"esik_oran": 0.30, "kademeler": [0.50, 0.75, 0.90],
-                  "oto": False, "oto_pasif": False, "jev": True}
-    try:
-        sys.path.insert(0, os.path.expanduser(
-            "~/007-HERMES/10-MCP-SERVERS/oturum-sikistirici"))
-        import ayar as _a
-        return _a.oku()
-    except Exception:
-        yol = os.path.join(HERMES_HOME, "czip", "ayar.json")
-        try:
-            with open(yol, encoding="utf-8") as f:
-                varsayilan.update(json.load(f) or {})
-        except Exception:
-            pass
-        env = os.environ.get("CZIP_ESİK_ORAN") or os.environ.get("CZIP_ESIK_ORAN")
-        if env:
-            try:
-                varsayilan["esik_oran"] = float(env)
-            except ValueError:
-                pass
-        return varsayilan
+    return _a.oku()
 
 
 AYAR = _ayar()
 ESİK_ORAN = float(AYAR.get("esik_oran", 0.30))                  # context_length'e oranlı eşik
 KADEMELER = sorted(AYAR.get("kademeler") or [0.50, 0.75, 0.90])  # kademeli uyarı
-OTO = bool(AYAR.get("oto"))                                      # sormadan paketle
+OTO = False # Live handover always requires an explicit user choice. Background packing is separate.
+#                                      # sormadan paketle
 SISTEM_PAYI = 25_000      # sistem promptu + araç tanımları tahmini
 TEKRAR_SURESI_SA = 8      # aynı oturum için yeniden uyuma aralığı
 ARTIS_GEREK = 25_000      # bu kadar büyümüşse erken yeniden uyar
-PIES = "📦 Paketle + yeni sohbet"  # buton metni — hook bu birebir metni yakalar
+PIES = T("📦 Pack + new chat", "📦 Paketle + yeni sohbet")  # buton metni — hook bu birebir metni yakalar
 
 
 def _simdi():
@@ -107,19 +92,11 @@ def _context_length(model):
 
 
 def _durum_oku():
-    try:
-        with open(DURUM_YOLU, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return read_json(DURUM_YOLU, {})
 
 
 def _durum_yaz(d):
-    os.makedirs(os.path.dirname(DURUM_YOLU), exist_ok=True)
-    tmp = DURUM_YOLU + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False)
-    os.replace(tmp, DURUM_YOLU)
+    atomic_json(DURUM_YOLU, d)
 
 
 def _kullanim(row):
@@ -180,36 +157,24 @@ def _telegram_gonder(token, chat_id, metin, thread_id=None, klavye=False):
         raise RuntimeError("telegram: " + str(v)[:200])
 
 
-def _teklif_yaz(chat_id, thread_id, sid, oran):
-    gecilen = [k for k in KADEMELER if oran >= k]
-    kademe_pct = int(round(gecilen[-1] * 100)) if gecilen else None
-    """czip-tasi plugin'inin bekledigi teklif dosyasi — kullanicinin sonraki
-    mesaji tiklanabilir 'sikistir/tasi' picker'ina donusur."""
-    os.makedirs(TEKLIF_DIZIN, exist_ok=True)
-    yol = os.path.join(TEKLIF_DIZIN, "%s-%s.json" % (chat_id, thread_id or "x"))
-    tmp = yol + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"sid": sid, "pct": int(oran * 100), "zaman": _simdi(),
-                   "oto": OTO, "oto_pasif": bool(AYAR.get("oto_pasif")),
-                   "jev": bool(AYAR.get("jev", True)),
-                   "kademe": kademe_pct}, f,
-                  ensure_ascii=False)
-    os.replace(tmp, yol)
+def _teklif_yaz(chat_id, thread_id, sid, oran, session_key=None):
+    path = os.path.join(TEKLIF_DIZIN, "%s-%s.json" % (chat_id, thread_id or "x"))
+    atomic_json(path, {"sid":sid, "session_key":session_key,
+        "profile":os.path.realpath(HERMES_HOME), "database":os.path.realpath(STATE_DB),
+        "pct":int(oran*100), "zaman":_simdi(), "oto":False, "oto_pasif":False,
+        "eksiksiz":True, "clef":bool(AYAR.get("clef", False))})
 
 
 def _uyari_metni(sid, baslik, deger, ctx, oran):
     baslik = (baslik or sid)[:60].replace("_", " ")
     return (
-        "⚠️ *Context şişiyor* — `{tip}`\n"
-        "{baslik}\n"
-        "Tahmini yük: ~{deger}k token / {ctx}k (%{oran})\n\n"
-        "Alt butona bas: paketlerim, yeni oturum açarım, kaldığımız yerden "
-        "paket ACILMADAN devam ederiz. (İstersen `/czip-tasi` da yazabilirsin.)"
+        T("⚠️ *Context usage* — `{tip}`\n{baslik}\nEstimated load: ~{deger}k / {ctx}k tokens ({oran}%).\nChoose the button to review a session handover.",
+          "⚠️ *Bağlam kullanımı* — `{tip}`\n{baslik}\nTahmini yük: ~{deger}k / {ctx}k token (%{oran}).\nOturum aktarımını değerlendirmek için butonu seç.")
     ).format(tip=sid, baslik=baslik,
              deger=round(deger / 1000), ctx=round(ctx / 1000), oran=int(oran * 100))
 
 
-def main(argv):
+def _main(argv):
     dry = "--dry" in argv
     test_sid = None
     if "--test" in argv:
@@ -227,12 +192,16 @@ def main(argv):
     gonderen = 0
     satirlar_out = []
 
+    seen_routes = set()
     for r in satirlar:
+        route = (str(r["chat_id"]), str(r["thread_id"] or ""))
+        if route in seen_routes: continue
+        seen_routes.add(route)
         sid = r["id"]
         if test_sid and test_sid not in sid:
             continue
         deger, ctx = _kullanim(r)
-        esik = max(ESİK_TOKEN, ESİK_ORAN * ctx)
+        esik = int(os.environ["CZIP_ESİK_TOKEN"]) if "CZIP_ESİK_TOKEN" in os.environ else _a.esik_token(ctx, AYAR)
         oran = deger / ctx if ctx else 0
         if deger < esik and not test_sid:
             continue
@@ -257,20 +226,27 @@ def main(argv):
             satirlar_out.append("GONDERME-HATASI %s: %s" % (sid, str(e)[:120]))
             # mesaj gitmese de teklif kalsin — kullanici mesaj atinca picker acilir
         try:
-            _teklif_yaz(r["chat_id"], r["thread_id"], sid, oran)
+            _teklif_yaz(r["chat_id"], r["thread_id"], sid, oran, r["session_key"])
         except OSError as e:
             satirlar_out.append("TEKLIF-YAZMA-HATASI %s: %s" % (sid, str(e)[:120]))
         durum[sid] = {"zaman": _simdi(), "deger": deger}
         gonderen += 1
 
-    if durum:
+    if durum and not dry:
         _durum_yaz(durum)
     # stdout: cron teslimi için kısa özet (sessiz kalması asıl hedef)
     if satirlar_out:
-        print("context-nobetci: eşik aşan %d oturum, uyarı gönderilen %d" % (len(satirlar_out), gonderen))
+        print(T("context-nobetci: %d sessions over threshold, %d notified", "context-nobetci: eşik aşan %d oturum, uyarı gönderilen %d") % (len(satirlar_out), gonderen))
         for s in satirlar_out:
             print("  " + s)
     return 0
+
+
+def main(argv):
+    if "--dry" in argv:
+        return _main(argv)
+    with file_lock(DURUM_YOLU):
+        return _main(argv)
 
 
 if __name__ == "__main__":

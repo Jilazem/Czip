@@ -16,41 +16,39 @@ their behaviour.
               per-session auto trigger (64_000 = pack and continue every session
               once it has used 64k tokens).
   kademeler : escalating tiers; each fires once per session
-  oto       : true  -> do not ask, decide and pack automatically (Jev-style)
-              false -> write the offer, let the user press the button
-  oto_pasif : in oto mode, also deactivate merged source sessions
+  oto       : enable background packing of closed, idle sessions in this profile
+  oto_pasif : legacy setting; automatic source closure is disabled
 """
 from __future__ import annotations
 
-import json
 import os
+from czip_runtime import atomic_json, file_lock, read_json, session_env
 
-AYAR_YOLU = os.path.expanduser(
-    os.environ.get("CZIP_AYAR", "~/.hermes/czip/ayar.json"))
+def ayar_yolu():
+    return os.path.expanduser(session_env("CZIP_AYAR") or os.path.join(session_env("HERMES_HOME", "~/.hermes"), "czip", "ayar.json"))
+
 
 VARSAYILAN = {
-    # Bulut yedegi KAPALI. Laya (yerel) cokerse karar kapisi ATLANIR; oturum
-    # icerigi disari cikmaz. Acilirsa Laya hatasinda TypeSafe/Jev bulut API'sine
-    # oturum basligi + son kullanici mesajlari + arac ciktisi ornekleri gider.
-    # KVKK: dava verisi buluta cikmaz kurali geregi varsayilan kapali.
-    "bulut_yedegi": False,
     "esik_oran": 0.50,
     "kalan_token": 70000,
     "mutlak_token": 0,
     "kademeler": [0.50, 0.75, 0.90],
     "oto": False,
     "oto_pasif": False,
-    "jev": True,
+    "clef": False,
 }
 
 
 def oku():
     a = dict(VARSAYILAN)
     try:
-        with open(AYAR_YOLU, encoding="utf-8") as f:
-            a.update(json.load(f) or {})
-    except Exception:
+        value = read_json(ayar_yolu(), {})
+        if not isinstance(value, dict): raise ValueError("Invalid Czip settings")
+        a.update(value)
+    except (OSError, ValueError):
         pass
+    a.pop("bulut_yedegi", None)
+    a.pop("jev", None)
     # Env overrides stay authoritative: an operator setting CZIP_ESIK_ORAN in a
     # unit file must not be silently overruled by a stale settings file.
     env = os.environ.get("CZIP_ESİK_ORAN") or os.environ.get("CZIP_ESIK_ORAN")
@@ -89,18 +87,14 @@ def oku():
 
 
 def yaz(**kw):
-    a = dict(VARSAYILAN)
-    try:
-        with open(AYAR_YOLU, encoding="utf-8") as f:
-            a.update(json.load(f) or {})
-    except Exception:
-        pass
-    a.update({k: v for k, v in kw.items() if v is not None})
-    os.makedirs(os.path.dirname(AYAR_YOLU), exist_ok=True)
-    tmp = AYAR_YOLU + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(a, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, AYAR_YOLU)
+    path = ayar_yolu()
+    with file_lock(path):
+        existing = read_json(path, {})
+        if not isinstance(existing, dict):
+            raise ValueError("Invalid Czip settings")
+        a = {**VARSAYILAN, **existing, **{k:v for k,v in kw.items() if v is not None}}
+        a.pop("bulut_yedegi", None); a.pop("jev", None)
+        atomic_json(path, a)
     return a
 
 

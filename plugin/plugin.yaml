@@ -1,7 +1,17 @@
 name: czip
 version: 1.0.0
-description: "Oturumu .hkp paketina sikistirir (/czip) ve yeni oturumda paket ACILMADAN okunur (/cunzip)."
+description: "Caller-scoped session packs / Oturuma özel paketler; Türkçe ve English komutlar."
 author: czip
 provides_commands:
   - czip
-  - cunzip
+  - czip-read
+  - czip-map
+  - czip-search
+  - czip-merge
+  - czip-auto
+  - czip-threshold
+  - czip-task
+  - czip-prompt
+  - czip-plan
+  - czip-end
+  - czip-help

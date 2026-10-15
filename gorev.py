@@ -24,6 +24,7 @@ import re
 import time
 
 import hkp
+from czip_runtime import T, atomic_json, file_lock, owner_key, read_json, unique_package_path
 
 KAYIT_YOL = os.path.join(hkp.PAKET_DIZIN, "gorev.json")
 TIPLER = ("promt", "plan")
@@ -33,21 +34,13 @@ ETIKET_RE = re.compile(r"^\[(PROMT|PLAN)\]\s*", re.I)
 
 
 def _kayit_oku():
-    try:
-        with open(os.path.expanduser(KAYIT_YOL), encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, list) else []
-    except Exception:
-        return []
+    value = read_json(KAYIT_YOL, [])
+    if not isinstance(value, list): raise ValueError(T("Invalid task registry", "Geçersiz görev kaydı"))
+    return value
 
 
 def _kayit_yaz(kayit):
-    yol = os.path.expanduser(KAYIT_YOL)
-    os.makedirs(os.path.dirname(yol), exist_ok=True)
-    gecici = yol + ".tmp"
-    with open(gecici, "w", encoding="utf-8") as f:
-        json.dump(kayit, f, ensure_ascii=False, indent=1)
-    os.replace(gecici, yol)
+    atomic_json(KAYIT_YOL, kayit)
 
 
 def _slug(s, n=48):
@@ -57,6 +50,7 @@ def _slug(s, n=48):
 def kaydet(tip, baslik, metin, ham=None, etiketler=None):
     """Onaylanmis promt/plan -> .hkp paketi. kid + yol doner."""
     tip = (tip or "").strip().lower()
+    if tip == "prompt": tip = "promt"
     if tip not in TIPLER:
         raise ValueError("tip 'promt' veya 'plan' olmali (verilen: %r)" % tip)
     metin = (metin or "").strip()
@@ -65,8 +59,7 @@ def kaydet(tip, baslik, metin, ham=None, etiketler=None):
     baslik = (baslik or metin.split("\n", 1)[0])[:120].strip()
     d = os.path.expanduser(hkp.PAKET_DIZIN)
     os.makedirs(d, exist_ok=True)
-    ad = "gorev-%s-%s-%s.hkp" % (tip, _slug(baslik), time.strftime("%Y%m%d-%H%M%S"))
-    yol = os.path.join(d, ad)
+    yol = unique_package_path(d, "gorev-" + tip + "-" + baslik)
     mesajlar = []
     if ham and ham.strip():
         mesajlar.append({"role": "user", "content": ham.strip()})
@@ -76,13 +69,14 @@ def kaydet(tip, baslik, metin, ham=None, etiketler=None):
     if not sonuc.get("ok"):
         raise RuntimeError(sonuc.get("hata") or "paketlenemedi")
     kid = hkp.id_ata(sonuc["yol"], tam_baslik)
-    kayit = _kayit_oku()
-    kayit.insert(0, {"kid": kid, "tip": tip, "baslik": baslik,
-                     "yol": sonuc["yol"], "t": time.strftime("%Y-%m-%d %H:%M"),
-                     "etiket": list(etiketler or []),
-                     "ham": (ham or "").strip()[:200],
-                     "bayt": sonuc["paket_bayt"], "karakter": len(metin)})
-    _kayit_yaz(kayit)
+    with file_lock(KAYIT_YOL):
+        kayit = _kayit_oku()
+        kayit.insert(0, {"kid": kid, "tip": tip, "baslik": baslik,
+                         "yol": sonuc["yol"], "t": time.strftime("%Y-%m-%d %H:%M"),
+                         "owner": owner_key(), "etiket": list(etiketler or []),
+                         "ham": (ham or "").strip()[:200],
+                         "bayt": sonuc["paket_bayt"], "karakter": len(metin)})
+        _kayit_yaz(kayit)
     return {"kid": kid, "tip": tip, "baslik": baslik, "yol": sonuc["yol"],
             "paket_bayt": sonuc["paket_bayt"], "karakter": len(metin)}
 
@@ -126,10 +120,10 @@ def listele(tip=None, n=20, sorgu=None):
     return kayit[:max(1, n)]
 
 
-def oku(kimlik):
+def oku(kimlik, tip=None):
     """kid | dosya yolu | 'son' -> {'tip','baslik','ham','metin'}"""
     yol = None
-    if kimlik and kimlik != "son":
+    if kimlik and kimlik not in ("son", "last", "latest"):
         for k in (_kayit_oku() or tara()):
             if k.get("kid") == kimlik or os.path.basename(str(k.get("yol"))) == kimlik:
                 yol = k["yol"]
@@ -137,7 +131,9 @@ def oku(kimlik):
         if yol is None:
             yol = hkp.id_coz(kimlik)
     else:
-        aday = (_kayit_oku() or tara())
+        owner = owner_key()
+        if not owner: raise ValueError(T("Give an explicit task ID", "Açık görev kimliğini ver"))
+        aday = [k for k in (_kayit_oku() or tara()) if k.get("owner") == owner and (not tip or k.get("tip") == tip)]
         if not aday:
             raise ValueError("kayitli gorev yok")
         yol = aday[0]["yol"]
@@ -154,5 +150,7 @@ def oku(kimlik):
             ham = c
         elif k.get("r") == "assistant":
             metin = c
+    if tip and (m.group(1).lower() if m else "?") != tip:
+        raise ValueError(T("Saved item has a different type", "Kayıt farklı türde"))
     return {"tip": (m.group(1).lower() if m else "?"), "baslik": ETIKET_RE.sub("", b),
             "ham": ham, "metin": metin, "yol": yol}

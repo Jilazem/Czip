@@ -1,211 +1,93 @@
-# czip — oturumunu taşı, bağlamını değil
+# Czip — kalıcı oturum hafızası
 
-İsteğe bağlı [yerel EmbeddingGemma 2 araması](EMBEDDINGS.md) eklendi. Aynı cihazdaki
-bellekte hazır model, anahtar kelime sonuçlarına anlamsal adaylar ekler. Esas no
-ve kaynak hash denetimi korunur; hizmet erişilemezse anahtar kelime araması sürer.
-> 🇬🇧 English version (primary): [README.md](README.md)
+[Türkçe](README_tr.md) · [English](README.md)
 
-Uzun bir Hermes sohbetini yeni oturuma taşıdığında tüm geçmiş bağlama
-geri döner; 4 MB'lık oturum = 4 MB'lık token faturası.
-**czip oturumu AI-okur bir pakete (HKP1) sıkıştırır ve yeni oturum o
-paketi asla açmaz** — tek satırlık indeks haritasına bakar, yalnız
-ihtiyacı olan mesaj aralığını okur.
+Czip bir ajan sohbetini aranabilir HKP1 arşivine paketler. Önce sınırlı iş haritası, sonra seçili pakette arama ve gereken ileti aralığı okunur. Paket bağlamın dışında kalır; modelin doğal bağlam penceresi büyümez.
 
-```
-$ czip paketle son
-PAKETLENDI: a37tvc | 1117 ilet | 4,2 MB → 237 KB (18x)
-```
+![Czip](assets/kapak-hero.png)
 
-![kapak](assets/kapak.png)
+## Oturum izolasyonu — 16 Ekim 2026
 
-## v3 — okuma maliyeti (2026-09-20)
-
-Asıl darboğaz sıkıştırma oranı değilmiş: **paket dosyası context'e hiç
-girmiyor**, maliyet yalnızca okuma çıktısı. 3421 iletlik gerçek oturumda
-ölçüldü (`o200k_base`):
-
-| Okuma yolu | Token |
-|---|---|
-| `czip oku` (tam indeks) | 93.417 |
-| `czip harita` (RAG haritası) | **1.561** |
-| + hedefli `czip ara "<sorgu>"` | +634 |
-
-**60× ucuz.** `harita` tam dökümü değil, iş haritasını verir: rol sayıları,
-araç histogramı, kullanıcı istekleri, son iletler ve arama talimatı. Okuyan
-AI sonra yalnızca ihtiyacı olan aralığı `ara` → `aralik` ile çeker.
-
-Ölçülen ama **işe yaramayan** iki fikir (denendi, veriyle elendi):
-
-- **Kodek ayarı.** LZMA2 `pb=0 lc=4 dict=256MB` → yalnızca **%1,2** kazanç.
-  bz2 %27 daha kötü. Mevcut `preset=9|EXTREME` zaten sınırda.
-- **Dil değiştirme.** Aynı talimat: Türkçe 39, İngilizce 34, Çince 35 token.
-  Üstelik talimat metni toplam maliyetin **%0,1'i** — çevirmek anlamsız.
-  Kazanç dilde değil, **JSON töreninde**: son iletleri `A> metin` biçimine
-  çevirmek %47 kazandırdı.
-
-## Yenilikler (Ekim 2026)
-
-- **Görev deposu (`czip promt` / `czip plan`)** — ham görevi çalıştırılabilir prompta çevirir, onay alır, küçük bir `.hkp` olarak kaydeder. Sonraki oturumda `/czip_promt oku <kid>` ile geri gelir. CLI: `hkp.py gorev kaydet|oku|listele` (`gorev.py`). Komut tarifleri [`commands/`](commands/) altında.
-- **Otomatik mod (`czip-auto`)** — `plugins-extra/czip-auto`, yeni oturum başlarken uzun ve kapanmış oturumları arka planda paketler (30 dk aralık, `CZIP_AUTO_ARALIK`). Motor: `czip_auto.py`; eşik `/czip_esik`.
-- **`czip-promt` Hermes eklentisi** (`plugins-extra/czip-promt`) — her turda bağlam + gateway yeniden yazımı; `czip promt <görev>` Telegram dahil her kanalda çalışır. Uzmana görev atarken tanım önce kaydedilir, atama gövdesi yalnızca `czip promt oku <kid>` olur.
-- **KVKK katmanı (`kvkk.py`)** — paketteki kişisel veriler tokenlanıp şifrelenir; dışarı giden kararlarda önce sorulur.
-- **Arama ve birleştirme** — hibrit indeks (`depo.py`), daha güvenli oturum birleştirme (`birlestir.py`), Claude Code dökümü için `ccd_dokum.py`, yerel karar kapısı `laya_kapi.py` (isteğe bağlı; `CZIP_KARAR_MOTORU`).
-- Yollar değiştirilebilir: `CZIP_HKP`, `CZIP_PYTHON`, `CZIP_PAKET_DIZIN`, `CZIP_AUTO_SCRIPT`, `HERMES_HOME`.
-
-## v3 — tekrar ayıklama
-
-Ölçüm: araç çıktıları paketin **%71'i**, ve bunların **%78'i birebir tekrar**
-(8.571 çıktı → 1.854 benzersiz). İkinci kopyalar `[AYNI-#N]` işaretine çevrildi.
-
-```
-12.217.023 → 479.724 B   (önce 562.416)   oran 21,7x → 25,5x
-```
-
-Beş gerçek oturumda: **39,8 MB → 1,44 MB** (15–35x), 2.590 tekrar ayıklandı.
-
-## v3 — birleştirme (`czip birlestir`)
-
-Aynı işi yapan oturumları tespit edip **tek pakete** alır, istenirse
-kaynakları pasife alır (kapat + arşivle; ileti silinmez, `czip gerial` ile
-geri alınır).
-
-Kararı **Jev** verir ve farkı gerçekten yapar: yerel benzerlik iki ayrı dava
-dosyasını 0,75 ile birleştirmeye kalktı, **Jev 0,13 verip reddetti**; gerçek
-kopyayı 0,97 ile onayladı. Zamanlanmış görev kalıpları ayıklanır (41 yanlış
-eşleşme → 20).
-
-```
-czip birlestir              # salt-okunur aday taraması
-czip birlestir oto --jev    # birleştir + kaynakları pasife al
-czip gerial <dosya>         # geri al
-```
-
-`czip paketle` ayrıca paketledikten sonra "bu işi yapan başka oturum da var"
-uyarısı verir (kararı yine Jev).
-
-## Rakamlar (gerçek oturumlarda, kanıtlı)
-
-| Oturum | Ham | Paket | Oran |
-|---|---|---|---|
-| Oyun geliştirme (1117 ilet, 31 uzun araç çıktısı) | 4,27 MB | 237 KB | **18,0x** |
-| Kod / araştırma (210 ilet) | 997 KB | 119 KB | **8,4x** |
-| Yeni oturumun bağlama girişi | 4,27 MB yerine | **~40 KB** indeks + son iletler | |
-
-## Neden "paket açılmaz"?
-
-Geleneksel kompaksiyon ya geçmişin tamamını yeni oturuma yazar (pahalı)
-ya da özetler (bilgi kaybı). czip ikisini de yapmaz: **harita + isteğe
-bağlı aralık** modeliyle yeni oturum 1117 iletin her birini tek satırda
-görür; ayrıntı gereken mesajı numarasından çeker. Sözlük jetonları
-(`␟3␞`) normal metne benzemez — çakışma yok, geri dönüş birebir
-(round-trip testi: 210/210 ilet bit-bit).
+- `czip paketle` ve `/czip`, Hermes gateway bağlamındaki çağıranı seçer. Veritabanındaki en son etkin sohbet tahmin edilmez. Bağlam yoksa tam kimlik veya döküm dosyası gerekir. Codex sohbeti için Hermes oturumu seçilmez.
+- Örtük “son paket” çağırana ve profile aittir. Yeni sohbette açık paket kimliği verilir. UUID dosya adları aynı başlıklı eşzamanlı paketlerin birbirini ezmesini engeller. Kayıt yazımı kilitli ve atomiktir; bozuk kayıt korunup bildirilir.
+- Varsayılan mod **eksiksizdir**: ileti metni, boşluklar ve satır sonları korunur; kaynaklar açık kalır. `--akilli` açıkça seçilen kayıplı moddur; eksik bildirimini incele. Ajan döküm zarfı ayrıştırılır; dosyanın bayt düzeyinde geri dönüşü için ham kaynağı sakla. Ham dosya silinmez.
+- `birlestir` açık kaynak kimlikleri ister ve oturumları kapatmaz. Benzerlik taraması öneridir; otomatik uygulama yoktur. Arka plan işçisi kendi profilindeki kapalı, hareketsiz oturumları kilit ve tekrar kontrolüyle paketler.
+- `sonlandir` ayrı işlemdir: tam olarak seçilen oturumu paketler, doğrular ve arşivler. Geri alma kaydı işlem tamamlanmadan yazılır; profil/veritabanı kimliği taşır. Sonradan değişmiş kayıtlar ezilmez.
+- Menüde her işlem bir kez görünür. Türkçe ve İngilizce komutlar aynı işlemi yapar. Çıktı ana makine/sistem dilini izler; `--dil tr|en`, `--lang tr|en` veya `CZIP_LANG` ile değiştirilebilir. JSON anahtarları ve MCP araç adları sabittir.
+- İsteğe bağlı karar kapısı **yerel Clef** kullanır. Bulut yedeği veya çeviri aktarması yoktur. Eski Python/MCP `jev` parametreleri ve `--jev` yalnız bu yerel kapı için uyumluluk adıdır.
 
 ## Kurulum
 
-```bash
-git clone https://github.com/Jilazem/Czip && cd Czip
+Motor ve CLI: Python 3.9+, standart kütüphane. MCP için ayrıca `mcp`, yerel model için ayrı Clef/MLX ortamı gerekir. Windows'ta `python czip_cli.py ...` veya `czip.cmd ...` kullanılır.
+
+```sh
+git clone https://github.com/Jilazem/Czip.git
+cd Czip
 ./install.sh
+# İsteğe bağlı Hermes kaydı:
+./install.sh --enable-hermes
 ```
 
-Kurulum: `czip` CLI (`~/.local/bin`) + Hermes plugin'i (`/czip`,
-`/cunzip` slash komutları) + skill köprüsü + 7 araçlık MCP sunucusu.
-Hermes'i yeniden başlattıktan sonra yeni oturumlarda `/czip` gerçek
-slash komut olarak görünür.
+Kurulum mevcut ortak `czip` başlatıcısını korur; varsa `czip-local` kurar. Hermes eklentisinin motor yolunu yazar ve eski eklenti dosyalarını yedekler. Çalışan hizmetleri yeniden başlatmaz. Özel Python ortamı için `CZIP_PYTHON` ver. Claude Code manifesti `.claude-plugin`, Codex becerisi `skills/czip-session-pack` altındadır.
 
-## Komutlar
+## Türkçe / İngilizce kullanım
 
-```
-czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]   → paket + 6 haneli ID
-czip oku <id|son>            → PAKETİ AÇMADAN: indeks + son iletler + durum
-czip aralik <id|son> <bas-bit>  → seçili aralık tam metin (jetonlar çözülü)
-czip ara <id|son> "sorgu"    → paket içi arama, ilgili mesaj i'lerini bul
-czip listele                 → kayıtlı paketler: id | tarih | başlık
-```
-
-Yeni oturumda taşıma akışı:
-
-```
-czip oku a37tvc          # harita: hangi mesajda ne var
-czip aralik a37tvc 1040-1060   # sadece gereken kısım
+```text
+czip paketle / pack [ID|DOSYA] [--eksiksiz|--akilli] [--clef]
+czip oku / read PAKET [İLK-SON]
+czip harita / map PAKET
+czip ara / search PAKET "SORGU"
+czip birlestir / merge ID1 ID2 [--eksiksiz|--akilli]
+czip oto / auto [aç|kapat|durum]          # on|off|status
+czip esik / threshold [50|50,75,90]
+czip gorev / task kaydet|oku|listele     # save|read|list
+czip promt / prompt kaydet|oku|listele
+czip plan kaydet|oku|listele
+czip sonlandir / end ID
+czip yardim / help
 ```
 
-## Özellikler
+Hermes menüsü: `/czip`, `/czip-read`, `/czip-map`, `/czip-search`, `/czip-merge`, `/czip-auto`, `/czip-threshold`, `/czip-task`, `/czip-prompt`, `/czip-plan`, `/czip-end`, `/czip-help`. Kök komut Türkçe de alır: `/czip oku ID`, `/czip paketle`. Eski alt çizgili adlar ayrıca kaydedilmez. `aralik/range`, `listele/list`, `gerial/undo`, `ayar/settings`, `index` ve `arsivara/archive-search` CLI yardımcılarıdır.
 
-- **Sözselleştirme** — tekrarlayan bloklar sözlük jetonuna iner, ham
-  tekrar pakete girmez (18x'in sırrı).
-- **Kayıpsız mod** — `--eksiksiz`: her bayt geri döner (8,4x).
-- **Durum tespiti** — `oku` çıktısı `kullanici_yaniti_bekliyor` ve son
-  iletin rolüyle "kaldığın yer"i bildirir; yeni oturum aynı yerden devam eder.
-- **Gizlilik** — `state.db` daima READ-ONLY URI ile okunur; paket
-  yalnızca `~/.hermes/session-packs` içine yazılır, hiçbir yere
-  dışarıya gitmez, silme/bozma yetkisi yoktur.
-- **Opsiyonel Jev kapısı** — `--jev`: 1200 B üstü araç çıktılarının
-  "gerekiyor mu?" kararını harici LLM'e (typesafe.ai System-One) toplu
-  sorar; hata ipucu içeren çıktılar asla sorgulanmaz. **Varsayılan
-  kapalıdır**, örnek içerik dışarı gider — açık bayrak + API anahtarı
-  gerektirir, ağ hatasında sessizce statik davranışa döner.
-
-## Bileşenler
-
-| Dosya | Rol |
-|---|---|
-| `hkp.py` | **motor** — saf stdlib (Python 3.9+, 0 bağımlılık): paketle/oku/ara, CLI, state.db RO okuyucu |
-| `czip` | terminal girişi (tek satır sarmalayıcı) |
-| `plugin/` | Hermes plugin'i — `/czip`, `/cunzip` slash komutları |
-| `mcp_server.py` | 7 araçlık MCP sunucusu (sikistir/iceri_ac/kilavuz/mesajlar/...) |
-| `skills/` | skill köprüsü — komut geçmişi eski süreçte bile çalışır |
-| `scripts/kapak.py` | bu README kapağını üreten Pillow betiği |
-| `tests/` | sentetik round-trip + CLI + aralık testleri (4/4) |
-
-## Format: HKP1
-
-```
-"HKP1" | meta_len (4B BE) | veri_len (4B BE) | LZMA-9e(meta) | LZMA-9e(gövde)
+```sh
+czip paketle TAM_OTURUM_KIMLIGI --eksiksiz --json
+czip paketle /tam/yol/rollout.jsonl --eksiksiz --json
+czip harita PAKET_KIMLIGI
+czip ara PAKET_KIMLIGI "karar"
+czip aralik PAKET_KIMLIGI 40-45
+czip oku PAKET_KIMLIGI 40-45
+czip yardim --dil en
 ```
 
-Meta: başlık, sözlük, sayaçlar, format sürümü, paketleme bilgisi.
-Gövde: mesaj kayıt listesi (rol, içerik, araç çağrıları, reasoning,
-zaman damgası) — jetonlar çözülerek okunur.
+Codex'te **CODEX_THREAD_ID ile eşleşen** mevcut rollout seçilir; en yeni dosya veya başka ajan sohbeti seçilmez. Ortak arşiv hizmeti varsa aynı ham kaynak kuyruğa alınır; “kuyrukta” ile “tamamlandı” ayrılır. Çalışan sohbet sıfırlanmaz. Arşiv talimatları geçmiş verisidir; yeni yetki değildir.
 
-## Test
+`czip gorev kaydet --tip=promt --baslik="Örnek"`, gövdeyi stdin'den alır. Görev/istem/plan örtük son kaydı da çağırana aittir; başka sohbete açık kimlikle aktarılır. `czip oto aç` isteğe bağlı `czip-auto` işçisini etkinleştirir; bu kanca kendiliğinden kurulmaz. İstem kancası yalnız açık Czip istem taleplerini dönüştürür; normal sohbet akışını değiştirmez.
 
-```bash
-python3 tests/test_roundtrip.py   # 4/4: paketle→oku→aralik + istatistik
+## Ayarlar ve eski kayıtlar
+
+- Profil/veritabanı: `HERMES_HOME`, `HERMES_STATE_DB`. Çağıran: gateway'in verdiği `HERMES_SESSION_ID` / `HERMES_SESSION_KEY`.
+- Paket/kayıt: `CZIP_PAKET_DIZIN`, `CZIP_KAYIT_YOL`; varsayılan `$HERMES_HOME/session-packs`. Ayar: `CZIP_AYAR`, varsayılan `$HERMES_HOME/czip/ayar.json`.
+- Dil: `CZIP_LANG=tr|en`. Motor/Python/işçi: `CZIP_HKP`, `CZIP_PYTHON`, `CZIP_AUTO_SCRIPT`.
+- Arka plan eşikleri: `CZIP_AUTO_MIN_MESSAGES=1500`, `CZIP_AUTO_IDLE_HOURS=2`, `CZIP_AUTO_MAX=5`.
+- Yerel model: `CZIP_CLEF_MODEL` mevcut model dizini; `CZIP_CLEF_PYTHON` yorumlayıcı. `CZIP_CLEF_COMMAND` kabukta çalıştırılmayan JSON argüman dizisidir.
+
+`--clef` yalnız `--akilli` üzerinde etkilidir. Kapı yoksa/bozuksa/zaman aşımına uğrarsa bildirilir; birleşme adayını onaylayamaz. Eksiksiz paketleme model gerektirmez. Eski `bulut_yedegi`/`jev` ayarları yok sayılır ve sonraki ayar kaydında temizlenir.
+
+HKP1 paketleri okunmaya devam eder. Eski kayıtlarda çağıran bağı yoktur: açık kimlik/yol kullan. Veritabanı kimliği bulunmayan eski geri alma kayıtları korunur, otomatik uygulanmaz. Bağlam motoru arşivleri artık profil özeti alt dizinindedir; eski kapsam belirtilmemiş dosyalar korunur ve açıkça okunmalıdır. Devam bağı yalnız Hermes'in `old_session_id` + `carry_over_context` geçişiyle kurulur; aynı motor nesnesinin yeniden kullanılması sohbetleri bağlamaz.
+
+## MCP, arama ve doğrulama
+
+`python mcp_server.py` toplam **12 sabit araç** sunar: `sikistir`, `iceri_ac`, `kilavuz`, `mesajlar`, `bilgi`, `oturum_sikistir`, `durum_tablosu`, `hafiza_ara`, `hafiza_getir`, `hafiza_harita`, `hafiza_guncelle`, `hafiza_durum`. Dil için mükerrer araç eklenmez. Bağımsız MCP sunucusu isteği yapan sohbeti tanıyamaz; açık oturum/paket kimliği ver. Önce `hafiza_harita`, sonra seçili aralıkları kullan. MCP varsayılanı eksiksizdir.
+
+[Bağlam motoru ve iş/kaynak araması](hermes_context_engine/README.md), [yerel anlamsal arama](EMBEDDINGS.md), [katalog](katalog/README-katalog.md).
+
+```sh
+python -m unittest discover -s tests -v
+python tests/test_roundtrip.py
 ```
 
-## Sınırlar
+Testler eşzamanlı çağıranları/süreçleri, profil sınırlarını, eksik kimliği, bozuk depoyu, geri almayı, birebir metni, açık devam geçişini, iki dili ve yerel kapının çalışmamasını kapsar. CI: Windows, Linux, macOS.
 
-- `akilli` mod araç çıktılarını 2000+2000 B baş/son dilimine indirger
-  (bildirilir); birebir arşiv gerekiyorsa `--eksiksiz`.
-- Paket dosyaları düz metin LZMA'dır — şifreleme sağlamaz; hassas
-  içerikli oturum paketlerini disk erişimi olan herkese açık tutma.
-- state.db tablo şeması Hermes sürümüne göre değişebilir; motor
-  PRAGMA ile eksik kolonları otomatik atlar.
-- `--jev` harici servistir (varsayılan kapalı); KVKK/veri politikası
-  gerektiren işlerde kullanma.
+[Czip Continuity Gauntlet](https://github.com/Jilazem/czip-continuity-gauntlet) ayrı bir sentetik devamlılık ölçümüdür. Eski sonuçları bu sürümün yeni doğrulaması sayılmaz; yöntem ve sınırlar o depoda bulunur. Sıkıştırma ve bağlam maliyeti döküme ve okuma biçimine bağlıdır.
 
-## Lisans
-
-MIT
-
-## Lisans
-
-- **Bireysel / ticari olmayan kullanım: ücretsiz ve özgür.**
-- **Ticari kullanım: ayrı lisans gerektirir.** Ayrıntı: [LICENSE](LICENSE)
-
-2026-09-20 öncesi sürümler MIT altında yayımlanmıştı; o sürümlerin MIT
-hakları saklıdır.
-# 6 Ekim 2026 geliştirmesi
-
-İsteğe bağlı [Hermes bağlam motoru ve iş/kaynak araması](hermes_context_engine/README.md)
-eklendi. Sıkıştırmada çıkarılan iletiler önce arşivlenir; kayıt başarısızsa mevcut
-bağlam korunur. Tekrarlanan kullanıcı istekleri ve oturum devam bağlantıları
-saklanır; uzun metinler özgün boşluklarıyla sayfalı okunur.
-
-`czip find`, `find-index` ve açıkça seçilen `find-drive` komutları yerel SQLite
-indeksinde plan, Kanban, doğrulanmış arşiv haritası ve isteğe bağlı Drive dosya
-adlarını tarar. Türkçe arama, kaynak özeti ve eski/kısmi kapsam bilgisi döner.
-Windows'ta `czip.cmd` veya `python czip_cli.py` kullanılabilir. Motoru etkinleştirme
-adımları bağlantıdaki belgede yer alır; kurulması açık masaüstü oturumuna otomatik
-yüklenmesini garanti etmez. Paket üretmek çalışan sohbetin bağlamını sıfırlamaz.
-Ham kayıtlar ve varsayılan paketler şifresizdir; kişisel oturumları Git'e eklemeyin.
+Lisans: [LICENSE](LICENSE).

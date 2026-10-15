@@ -48,7 +48,21 @@ class RegressionTests(unittest.TestCase):
  def test_repeated_user_instruction_preserved(self):
   e=self.engine('repeat');m={'role':'user','content':'devam et'};e._czip_store([m]);e._czip_store([x for _,x in e._removed([m],[])]);self.assertEqual(e._czip_archive,[m,m])
  def test_rotated_session_reloads_original_archive(self):
-  e=self.engine('root');e._czip_store([{'role':'user','content':'Yangın raporu 2026/123'}]);e.on_session_start('continuation');fresh=self.engine('continuation');self.assertEqual(fresh._czip_sid,'root');self.assertEqual(fresh._czip_archive,e._czip_archive)
+  e=self.engine('root');e._czip_store([{'role':'user','content':'Yangın raporu 2026/123'}]);e.on_session_start('continuation',old_session_id='root',carry_over_context=True);fresh=self.engine('continuation');self.assertEqual(fresh._czip_sid,'root');self.assertEqual(fresh._czip_archive,e._czip_archive)
+ def test_reusing_engine_for_unrelated_session_does_not_make_alias(self):
+  e=self.engine('independent-a');e._czip_store([{'role':'user','content':'ONLY_A'}]);e.on_session_start('independent-b');self.assertEqual(e._czip_archive,[]);e._czip_store([{'role':'user','content':'ONLY_B'}]);self.assertEqual(self.engine('independent-a')._czip_archive[0]['content'],'ONLY_A');self.assertEqual(self.engine('independent-b')._czip_archive[0]['content'],'ONLY_B')
+ def test_equal_ids_in_two_profiles_stay_separate(self):
+  from unittest.mock import patch
+  with patch.dict(os.environ,{'HERMES_HOME':str(mod.PACK_DIR/'profile-a')}):
+   a=self.engine('equal-profile-id');a._czip_store([{'role':'user','content':'PROFILE_A'}])
+  with patch.dict(os.environ,{'HERMES_HOME':str(mod.PACK_DIR/'profile-b')}):
+   b=self.engine('equal-profile-id');self.assertEqual(b._czip_archive,[]);b._czip_store([{'role':'user','content':'PROFILE_B'}])
+  self.assertNotEqual(a._paths(),b._paths())
+ def test_sanitized_and_truncated_session_names_do_not_collide(self):
+  self.assertNotEqual(mod._safe_id('a/b'),mod._safe_id('a_b'))
+  self.assertNotEqual(mod._safe_id('x'*150+'a'),mod._safe_id('x'*150+'b'))
+ def test_explicit_carry_does_not_attach_to_previously_bound_other_session(self):
+  root=self.engine('carry-source');root._czip_store([{'role':'user','content':'SOURCE'}]);other=self.engine('carry-unrelated');other._czip_store([{'role':'user','content':'UNRELATED'}]);other.on_session_start('carry-child',old_session_id='carry-source',carry_over_context=True);self.assertEqual(other._czip_archive,[{'role':'user','content':'SOURCE'}])
  def test_exact_long_output_pagination(self):
   e=self.engine('page');text='  Yangın\n\t'+('a  b\n'*5000)+' SON ';e._czip_store([{'role':'tool','content':text,'tool_call_id':'x'}]);parts=[];args={'range':'0','chars':5000}
   while args:
@@ -97,7 +111,7 @@ class RegressionTests(unittest.TestCase):
  def test_two_engine_writers_preserve_both_messages(self):
   a=self.engine('two-writers');b=self.engine('two-writers');a._czip_store([{'role':'user','content':'a'}]);b._czip_store([{'role':'user','content':'b'}]);self.assertEqual([m['content'] for m in self.engine('two-writers')._czip_archive],['a','b'])
  def test_corrupt_raw_preserved(self):
-  p=pathlib.Path(tmp.name)/'corrupt.jsonl';p.write_text('not json');e=self.engine('corrupt')
+  initial=self.engine('corrupt');p=initial._paths()[0];p.parent.mkdir(parents=True,exist_ok=True);p.write_text('not json');e=self.engine('corrupt')
   with self.assertRaises(RuntimeError):e._czip_store([{'role':'user','content':'x'}])
   self.assertEqual(p.read_text(),'not json')
  def test_independent_process_writers_preserve_all_messages(self):
@@ -108,7 +122,7 @@ class RegressionTests(unittest.TestCase):
    for p in processes:p.start()
    try:
     for p in processes:p.join(20);self.assertEqual(p.exitcode,0)
-    messages=[json.loads(line)['content'] for line in (pathlib.Path(folder)/'parallel.jsonl').read_text(encoding='utf-8').splitlines()]
+    messages=[json.loads(line)['content'] for line in next(pathlib.Path(folder).glob('*/parallel.jsonl')).read_text(encoding='utf-8').splitlines()]
     self.assertEqual(set(messages),{value+str(i) for value in ['a','b'] for i in range(5)});self.assertEqual(len(messages),10)
    finally:
     for p in processes:

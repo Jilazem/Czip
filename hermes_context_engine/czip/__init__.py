@@ -191,7 +191,12 @@ def _clip(s: Any, n: int) -> Any:
 
 
 def _safe_id(session_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", session_id or "nosession")[:120]
+    if not session_id:
+        raise ValueError("Czip requires a session identity")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
+    if safe != session_id:
+        safe = safe[:80] + "-" + hashlib.sha256(session_id.encode()).hexdigest()[:24]
+    return safe
 
 
 class CzipContextEngine(ContextCompressor):
@@ -209,6 +214,12 @@ class CzipContextEngine(ContextCompressor):
         self._czip_keys: set = set()
         self._czip_lock = threading.Lock()
         self._czip_reload_error = None
+        try:
+            from gateway.session_context import get_session_env
+        except ImportError:
+            get_session_env = os.environ.get
+        home = str(Path(get_session_env("HERMES_HOME", "~/.hermes")).expanduser().resolve())
+        self._archive_dir = PACK_DIR / hashlib.sha256(home.encode()).hexdigest()[:20]
 
     # -- identity ----------------------------------------------------------
     @property
@@ -250,25 +261,30 @@ class CzipContextEngine(ContextCompressor):
     # -- session / persistence --------------------------------------------
     def _paths(self):
         sid = _safe_id(self._czip_sid or "nosession")
-        return PACK_DIR / f"{sid}.jsonl", PACK_DIR / f"{sid}.hkp"
+        return self._archive_dir / f"{sid}.jsonl", self._archive_dir / f"{sid}.hkp"
 
     def on_session_start(self, session_id: str, **kwargs) -> None:
         super().on_session_start(session_id, **kwargs)
-        # Keep the first id for the agent's lifetime: Hermes may rotate the
-        # session id on compaction, but the archive must stay one pack.
+        sid = _safe_id(session_id)
+        old = kwargs.get('old_session_id')
+        continuation = bool(old and kwargs.get('carry_over_context'))
+        if self._czip_sid is not None and sid != self._czip_sid:
+            # Reusing an engine instance does not prove two conversations are related.
+            self.on_session_reset()
         if self._czip_sid is None:
-            sid = _safe_id(session_id)
-            old = kwargs.get('old_session_id')
-            if old and kwargs.get('carry_over_context'):
+            if continuation:
                 root = _safe_id(old)
-                previous_alias = PACK_DIR / 'aliases' / (root+'.json')
+                previous_alias = self._archive_dir / 'aliases' / (root+'.json')
                 if previous_alias.exists():
-                    root = json.loads(previous_alias.read_text(encoding='utf-8')).get('root')
+                    previous = json.loads(previous_alias.read_text(encoding='utf-8'))
+                    if previous.get('source') == 'native carry_over_context transition':
+                        root = previous.get('root')
                 if not root or root != _safe_id(root): raise ValueError('Invalid Czip continuation root')
-                _atomic_json(PACK_DIR/'aliases'/(sid+'.json'),{'root':root,'source':'native carry_over_context transition'})
-            alias = PACK_DIR / 'aliases' / (sid + '.json')
+                _atomic_json(self._archive_dir/'aliases'/(sid+'.json'),{'root':root,'source':'native carry_over_context transition'})
+            alias = self._archive_dir / 'aliases' / (sid + '.json')
             if alias.exists():
-                root = json.loads(alias.read_text(encoding='utf-8')).get('root')
+                record = json.loads(alias.read_text(encoding='utf-8'))
+                root = record.get('root') if record.get('source') == 'native carry_over_context transition' else sid
                 if not root or root != _safe_id(root):
                     raise ValueError('Invalid Czip archive alias')
                 sid = root
@@ -284,8 +300,8 @@ class CzipContextEngine(ContextCompressor):
                     logger.warning("czip: could not reload archive %s: %s", jl, e)
         # Native Hermes can rotate the id after a compaction. Persist that exact
         # continuation so a new process can find the original archive.
-        if _safe_id(session_id) != _safe_id(self._czip_sid):
-            _atomic_json(PACK_DIR / 'aliases' / (_safe_id(session_id)+'.json'), {'root':_safe_id(self._czip_sid),'source':'same engine on_session_start continuation'})
+        if continuation and _safe_id(session_id) != _safe_id(self._czip_sid):
+            _atomic_json(self._archive_dir / 'aliases' / (_safe_id(session_id)+'.json'), {'root':_safe_id(self._czip_sid),'source':'native carry_over_context transition'})
 
     def on_session_reset(self) -> None:
         super().on_session_reset()
@@ -301,16 +317,17 @@ class CzipContextEngine(ContextCompressor):
         if self._czip_reload_error:
             raise RuntimeError('Previous archive unreadable; refusing to overwrite it')
         if self._czip_sid is None:
-            self._czip_sid = f"anon-{int(time.time())}-{os.getpid()}"
+            import uuid
+            self._czip_sid = "anon-" + uuid.uuid4().hex
         jl, pack = self._paths()
-        PACK_DIR.mkdir(parents=True, exist_ok=True)
+        self._archive_dir.mkdir(parents=True, exist_ok=True)
         with self._czip_lock, _archive_lock(jl):
             if jl.exists():
                 with jl.open(encoding='utf-8') as f:
                     self._czip_archive = [json.loads(x) for x in f if x.strip()]
             base = len(self._czip_archive)
             archive = self._czip_archive + msgs
-            fd, temporary = tempfile.mkstemp(prefix=jl.stem+'.', dir=PACK_DIR)
+            fd, temporary = tempfile.mkstemp(prefix=jl.stem+'.', dir=self._archive_dir)
             staged = Path(temporary); staged_pack = Path(temporary+'.hkp')
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:

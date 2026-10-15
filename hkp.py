@@ -4,7 +4,7 @@
 oturum-sikistirici MCP sunucusu ve /czip plugin'i TARAFINDAN ORTAK kullanilir.
 Amaç: uzun bir Hermes oturumunu yeni oturuma tasinacak kadar küçültmek; okuyan AI
 eksiksiz anlayip devam edebilsin. Kayip yok: 'eksiksiz' modda her bayt geri doner
-(bu modda arac-ciktisi kirpma, Jev budamasi ve tekrar ayiklama DEVRE DISI).
+(bu modda arac-ciktisi kirpma, Clef budaması ve tekrar ayiklama DEVRE DISI).
 
 Format HKP1: "HKP1" + 4B meta_uzunlugu + 4B veri_uzunlugu + LZMA(meta) + LZMA(veri)
 Güvenlik: state.db daima READ-ONLY URI; silme/bozma yok.
@@ -20,6 +20,11 @@ import struct
 import sqlite3
 import sys
 import time
+# Also support explicit importlib loading by external benchmark adapters.
+_engine_dir = os.path.dirname(os.path.abspath(__file__))
+if _engine_dir not in sys.path:
+    sys.path.insert(0, _engine_dir)
+from czip_runtime import T, atomic_json, file_lock, owner_key, read_json, session_env, session_identity, unique_package_path
 
 IMZA = b"HKP1"
 V = 1
@@ -29,31 +34,29 @@ JETON_KAP = "\u241e"     # ␞
 JETON_RE = re.compile("\u241f(\\d{1,6})\u241e")
 KOD_IPUCU = re.compile(r"(<[a-zA-Z/!]|function |=>|\bdef \b|\bimport \b|```\|\|.*\||=>|\{\{|\}\})")
 PARCA_ILET = 40
-PAKET_DIZIN = os.environ.get("CZIP_PAKET_DIZIN", "~/007-HERMES/05-CIKTILAR/oturum-paketleri")
+PAKET_DIZIN = os.environ.get("CZIP_PAKET_DIZIN", os.path.join(session_env("HERMES_HOME", "~/.hermes"), "session-packs"))
 KAYIT_YOL = os.environ.get("CZIP_KAYIT_YOL", os.path.join(PAKET_DIZIN, "kayit.json"))
 ARAMA_MAX_SATIR = 8
 
 
 def _kayit_oku():
-    """id -> yol kayit tablosu (bozuksa bos dict; okunur-kirilir, kayip tolere)."""
-    try:
-        with open(os.path.expanduser(KAYIT_YOL), encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    """A missing registry is empty; a damaged registry must not be overwritten."""
+    value = read_json(KAYIT_YOL, {})
+    if not isinstance(value, dict):
+        raise ValueError(T("Invalid package registry", "Geçersiz paket kaydı"))
+    return value
 
 
 def _kayit_yaz(kayit):
-    yol = os.path.expanduser(KAYIT_YOL)
-    os.makedirs(os.path.dirname(yol), exist_ok=True)
-    gecici = yol + ".tmp"
-    with open(gecici, "w", encoding="utf-8") as f:
-        json.dump(kayit, f, ensure_ascii=False, indent=1)
-    os.replace(gecici, yol)
+    atomic_json(KAYIT_YOL, kayit)
 
 
-def id_ata(yol, baslik=None):
+def id_ata(yol, baslik=None, source_id=None):
+    with file_lock(KAYIT_YOL):
+        return _id_ata(yol, baslik, source_id)
+
+
+def _id_ata(yol, baslik=None, source_id=None):
     """Pakete 6 haneli kisA id ver; kayit.json'a yazilir. Tekrar atarsa ayni id doner."""
     yol = os.path.abspath(os.path.expanduser(yol))
     kayit = _kayit_oku()
@@ -66,7 +69,8 @@ def id_ata(yol, baslik=None):
     for _ in range(200):
         kid = "".join(rnd.choice(harfler) for _ in range(6))
         if kid not in kayit:
-            kayit[kid] = {"yol": yol, "baslik": (baslik or "")[:120], "t": time.strftime("%Y-%m-%d %H:%M")}
+            kayit[kid] = {"yol": yol, "baslik": (baslik or "")[:120], "t": time.strftime("%Y-%m-%d %H:%M"),
+                          "created_ns": time.time_ns(), "owner": owner_key(), "source_id":source_id, "source_database":os.path.realpath(db_yolu())}
             _kayit_yaz(kayit)
             return kid
     raise RuntimeError("id havuzu tukendi")
@@ -74,12 +78,25 @@ def id_ata(yol, baslik=None):
 
 def id_coz(girdi):
     """'son', 6 haneli id veya yol -> paket yolu (yoksa None)."""
-    if not girdi or girdi == "son":
+    if not girdi or girdi in ("son", "last", "latest"):
         return son_paket()
     kayit = _kayit_oku()
     if girdi in kayit:
-        return kayit[girdi].get("yol")
+        value = kayit[girdi]
+        return value.get("yol") if isinstance(value, dict) else value
     return os.path.abspath(os.path.expanduser(girdi))
+
+
+def verify_package_source(kid, path, sid):
+    """Bind a handover to its exact source and profile before any session reset."""
+    entry = _kayit_oku().get(kid)
+    if (not isinstance(entry, dict) or entry.get("source_id") != sid or
+        entry.get("source_database") != os.path.realpath(db_yolu()) or
+        os.path.realpath(entry.get("yol", "")) != os.path.realpath(path)):
+        raise ValueError(T("Package/source/profile identity mismatch", "Paket/kaynak/profil kimliği eşleşmiyor"))
+    if harita(path, son_n=0, istek_max=0)["toplam"] < 1:
+        raise ValueError(T("Package is empty", "Paket boş"))
+    return {"ok":True, "source_id":sid, "kid":kid}
 
 
 def hata(msg):
@@ -157,6 +174,10 @@ def girdi_ayristir(veri):
     if not isinstance(veri, str):
         raise ValueError("girdi: dosya yolu, mesaj listesi, sozluk veya metin olmali")
     girdi = os.path.expanduser(veri.strip())
+    if len(girdi) < 2048 and "\n" not in girdi and os.path.isfile(girdi):
+        import ajanlar
+        if ajanlar.bicim_algila(girdi) == "codex":
+            return ajanlar.oku(girdi)[2]
     ham = None
     if len(girdi) < 2048 and "\n" not in girdi and os.path.isfile(girdi):
         with open(girdi, "rb") as f:
@@ -234,16 +255,16 @@ def json_metin_ayristir(v):
     return v
 
 
-def kayit_yap(m, sabit_adaylari):
+def kayit_yap(m, sabit_adaylari, eksiksiz=False):
     """Tek ham mesaj -> kanonik kisa kayit.
     api_content atilir: icerik + oturuma-ozel memory-context enjeksiyonudur,
     yeni oturumda kendiliginden yenilenir."""
     rol = str(m.get("role") or "?")
-    icerik = json_metin_ayristir(m.get("content"))
+    icerik = m.get("content") if eksiksiz else json_metin_ayristir(m.get("content"))
     if icerik is not None and not isinstance(icerik, str):
         icerik = json.dumps(icerik, ensure_ascii=False, separators=(",", ":"))
     k = {"r": rol}
-    if icerik:
+    if icerik or (eksiksiz and icerik is not None):
         k["c"] = icerik
     tcs = json_metin_ayristir(m.get("tool_calls"))
     if isinstance(tcs, dict):
@@ -264,14 +285,14 @@ def kayit_yap(m, sabit_adaylari):
             sade.append(g)
         k["tc"] = sade
     r1, r2 = m.get("reasoning"), m.get("reasoning_content")
-    if isinstance(r2, str) and r2 == r1:
+    if not eksiksiz and isinstance(r2, str) and r2 == r1:
         r2 = None
     if isinstance(r1, str) and r1:
         k["e"] = r1
     if isinstance(r2, str) and r2:
         k["e2"] = r2
     fr = m.get("finish_reason")
-    if fr and fr != "stop":
+    if fr and (eksiksiz or fr != "stop"):
         k["f"] = fr
     x = {}
     for a in ("id", "tool_call_id", "tool_name", "platform_message_id",
@@ -280,6 +301,10 @@ def kayit_yap(m, sabit_adaylari):
         if v is None or v == "" or v is False or v == []:
             continue
         x[a] = v
+    if eksiksiz:
+        for field, value in m.items():
+            if field not in ("role", "content", "tool_calls", "reasoning", "reasoning_content", "finish_reason"):
+                x[field] = value
     for a, v in x.items():
         sabit_adaylari.setdefault(a, set()).add(json.dumps(v, ensure_ascii=False))
     if x:
@@ -307,12 +332,11 @@ def arac_kirp(s, bas, son):
     return s[:bas] + f"\n…[{n - bas - son} bayt]…\n" + s[-son:]
 
 
-# ------------------------------------------------------- Jev karar kapisi (opsiyonel)
-# Arac ciktilarini tek tek 'gerekiyor mu?' diye Jev'e (System-One) TOPLU sorar:
+# ------------------------------------------------------- Clef karar kapısı (opsiyonel)
+# Arac ciktilarini tek tek 'gerekiyor mu?' diye Clef'e TOPLU sorar:
 # olu olanlar pakete hic girmez, gerekenler OLDUGU GIBI kalir (ozet yok).
 # Hata/timeout -> sessiz fallback (statik dilim). state.db'ye asla dokunulmaz;
 # 'silme' yalniz paketten cikarmadir, kaynak durur.
-JEV_API = "https://api.typesafe.ai/v1/systemone"
 JEV_TOPLU = 20       # tek istekteki soru sayisi (batch ~9x tasarruf)
 JEV_AJ = 0.30        # altindaki noul -> olu sayilir, paketten cikarilir
 JEV_TUT = 0.55       # ustundeki noul -> tam kalir, statik dilim uygulanmaz
@@ -326,170 +350,69 @@ HATA_IPUCU = re.compile(
     r"|hata|başarısız|basarisiz|çöktü|cobtu|denied|yasak|yok: not found|No such file)")
 
 
-# ── Karar kapisi motoru ───────────────────────────────────────────────
-# Varsayilan: Laya (yerel, anahtarsiz; TR icerik node1 koprusuyle EN'e cevrilir).
-# CZIP_KARAR_MOTORU=jev ile eski TypeSafe/Jev API'sine donulur.
-KARAR_MOTORU = os.environ.get("CZIP_KARAR_MOTORU", "laya").strip().lower()
-LAYA_PY = os.environ.get("CZIP_LAYA_PYTHON",
-                         os.path.expanduser("~/007-HERMES/04-ARASTIRMA/laya-mlx/laya-mlx/.venv/bin/python"))
-LAYA_KAPI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "laya_kapi.py")
-LAYA_AJ = 0.15        # Laya noul olceginde silme esigi — Jev'den korumaci (bkz. kalibrasyon notu)
-# Guven esigi: Laya'nin "confidence < 0.30 ise karari dogrula" kurali. DIKKAT: noul
-# tipinde confidence = max(p, 1-p) oldugu icin 0.50'nin altina inmez; bu kapi pratikte
-# choice/score tipine gecilirse devreye girer. noul icin asil koruma LAYA_AJ esigidir.
-LAYA_MIN_GUVEN = 0.30
-_laya_surec = None
-_laya_guven = {}       # son toplu sorgunun {qid: confidence} degerleri
+# Optional local decision gate. Legacy ``jev`` Python arguments remain aliases.
+KARAR_MOTORU = os.environ.get("CZIP_KARAR_MOTORU", "clef").strip().lower()
+KARAR_MIN_GUVEN = .30
+from contextvars import ContextVar
+_karar_confidence = ContextVar("czip_decision_confidence", default=None)
 
 
-def _laya_baslat():
-    """Laya isci surecini bir kez baslatir (model 842MB — her soruda yeniden yuklenmez)."""
-    global _laya_surec
-    import subprocess
-    if _laya_surec is not None and _laya_surec.poll() is None:
-        return _laya_surec
-    if not (os.path.exists(LAYA_PY) and os.path.exists(LAYA_KAPI)):
-        raise ValueError("laya_yok")
-    # py3.14 site-packages mirasi (gateway PYTHONPATH) cocuk py3.12'de numpy'i cokertiyordu
-    _ortam = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
-    _laya_surec = subprocess.Popen([LAYA_PY, LAYA_KAPI], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, text=True, bufsize=1, env=_ortam)
-    return _laya_surec
-
-
-def _laya_batch(durum, sorular, timeout):
-    """{qid: instructions} -> {qid: noul}. Jev ile ayni sozlesme; hata ValueError."""
-    sp = _laya_baslat()
-    try:
-        sp.stdin.write(json.dumps({"state": durum, "questions": sorular}, ensure_ascii=False) + "\n")
-        sp.stdin.flush()
-        satir = sp.stdout.readline()
-    except Exception as e:  # noqa: BLE001
-        raise ValueError("laya_io_" + str(e)[:40])
-    if not satir:
-        raise ValueError("laya_cevapsiz")
-    veri = json.loads(satir)
-    if veri.get("error"):
-        raise ValueError("laya_" + str(veri["error"])[:60])
-    global _laya_guven
-    _laya_guven = {q: float(c) for q, c in (veri.get("confidence") or {}).items()}
-    out = {q: float(n) for q, n in (veri.get("answers") or {}).items()}
-    if not out:
-        raise ValueError("bos_answers")
-    return out
-
-
-def _bulut_yedegi_acik():
-    """Laya cokerse buluta dusulsun mu? Varsayilan HAYIR (KVKK)."""
-    env = os.environ.get("CZIP_BULUT_YEDEGI")
-    if env is not None:
-        return env.strip() not in ("0", "false", "hayir", "no", "")
-    try:
-        import ayar as _a
-        return bool(_a.oku().get("bulut_yedegi"))
-    except Exception:  # noqa: BLE001
-        return False
+def karar_guven():
+    return _karar_confidence.get() or {}
 
 
 def karar_batch(durum, sorular, timeout=25, motor=None):
-    """Karar kapisi: Laya (varsayilan) veya Jev. Doner: (noullar, motor_adi)."""
-    m = (motor or KARAR_MOTORU)
-    if m == "laya":
+    """Run an explicitly enabled local Clef gate with bounded, isolated I/O."""
+    import subprocess
+    import math
+    if (motor or KARAR_MOTORU) != "clef":
+        raise ValueError(T("Only the local Clef decision gate is supported", "Yalnız yerel Clef karar kapısı destekleniyor"))
+    configured = os.environ.get("CZIP_CLEF_COMMAND")
+    command = json.loads(configured) if configured else [os.environ.get("CZIP_CLEF_PYTHON", sys.executable),
+               os.path.join(os.path.dirname(os.path.abspath(__file__)), "clef_kapi.py")]
+    if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
+        raise ValueError("CZIP_CLEF_COMMAND must be a JSON argument array")
+    _karar_confidence.set({})
+    try:
+        response = subprocess.run(command, input=json.dumps({"state": durum, "questions": sorular}, ensure_ascii=False)+"\n",
+                                  capture_output=True, text=True, timeout=timeout, check=True)
+        data = json.loads(response.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError("clef_unavailable:" + type(error).__name__) from None
+    if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("answers"), dict):
+        raise ValueError("clef_invalid_response")
+    if set(data["answers"]) != set(sorular):
+        raise ValueError("clef_unknown_question_or_incomplete_answers")
+    if not isinstance(data.get("confidence", {}), dict):
+        raise ValueError("clef_invalid_confidence")
+    answers = {}
+    confidence = {}
+    for key, value in data["answers"].items():
+        if key not in sorular:
+            raise ValueError("clef_unknown_question")
         try:
-            return _laya_batch(durum, sorular, timeout), "laya"
-        except ValueError:
-            # SESSIZ BULUT YEDEGI YOK. Eskiden Laya herhangi bir sebeple
-            # coktugunde (model yok, surec oldu, I/O) oturum icerigi haber
-            # vermeden api.typesafe.ai'ye gidiyordu. Varsayilan artik: yedek
-            # yok -> karar kapisi atlanir, paketleme budamasiz devam eder.
-            if not _bulut_yedegi_acik():
-                raise
-            key = _jev_anahtar()
-            if not key:
-                raise
-            return _jev_batch(key, durum, sorular, timeout), "jev"
-    key = _jev_anahtar()
-    if not key:
-        raise ValueError("anahtar_yok")
-    return _jev_batch(key, durum, sorular, timeout), "jev"
+            if isinstance(value, bool): raise ValueError()
+            score = float(value)
+            certainty = float((data.get("confidence") or {}).get(key, .5))
+        except (TypeError, ValueError):
+            raise ValueError("clef_invalid_score") from None
+        if not math.isfinite(score) or not 0 <= score <= 1 or not math.isfinite(certainty) or not 0 <= certainty <= 1:
+            raise ValueError("clef_invalid_score")
+        answers[key] = score; confidence[key] = certainty
+    _karar_confidence.set(confidence)
+    return answers, "clef"
 
 
 def karar_esikleri(motor=None):
-    """(silme, tutma) esikleri — Laya olceginde silme daha korumaci."""
-    return (LAYA_AJ if (motor or KARAR_MOTORU) == "laya" else JEV_AJ), JEV_TUT
-
-
-def _jev_anahtar():
-    """TYPESAFE_API_KEY: once ortam, sonra HERMES_HOME/.env (czip wrapper'siz terminal)."""
-    k = os.environ.get("TYPESAFE_API_KEY", "")
-    if k:
-        return k.strip()
-    yol = os.path.join(os.environ.get("HERMES_HOME",
-                                      os.path.expanduser("~/.hermes")), ".env")
-    try:
-        with open(yol, encoding="utf-8") as f:
-            for satir in f:
-                m = re.match(r"\s*TYPESAFE_API_KEY\s*=\s*(.+?)\s*$", satir)
-                if m:
-                    return m.group(1)
-    except OSError:
-        pass
-    return ""
-
-
-def _jev_batch(key, durum, sorular, timeout):
-    """{qid: instructions} -> {qid: noul}. Ag/HTTP hatasi ValueError firlatir."""
-    import urllib.request
-    import urllib.error
-    govde = json.dumps({"model": "jev-latest", "state": durum,
-                        "questions": {q: {"type": "noul", "instructions": tal}
-                                      for q, tal in sorular.items()}},
-                       ensure_ascii=False).encode("utf-8")
-    # --- KVKK disa-gidis kapisi (Gokhan 25.09.2026): govde makineden cikmadan
-    # ONCE tek kapidan gecer: tarama (regex + yerel LLM) -> 5 secenekli kullanici
-    # onayi -> izin varsa TC/ad-soyad/adres/malik tokenlanir, harita yerde sifreli
-    # kalir. Onay sorulamayan ortamlarda (TTY yok) varsayilan RET, gonderi olmaz.
-    try:
-        import kvkk
-    except ImportError:
-        kvkk = None
-    if kvkk:
-        yeni = kvkk.dis_kapisi(
-            {"model": "jev-latest", "state": durum,
-             "questions": {q: {"type": "noul", "instructions": tal}
-                           for q, tal in sorular.items()}},
-            etiket="jev-batch %d soru" % len(sorular))
-        if yeni is None:
-            raise ValueError("kvkk_red")
-        govde = json.dumps(yeni, ensure_ascii=False).encode("utf-8")
-    istek = urllib.request.Request(
-        JEV_API, data=govde,
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + key})
-    try:
-        with urllib.request.urlopen(istek, timeout=timeout) as yanit:
-            veri = json.loads(yanit.read())
-    except urllib.error.HTTPError as e:
-        raise ValueError(f"http_{e.code}")
-    except Exception as e:
-        raise ValueError(str(e)[:80])
-    out = {}
-    for q, a in (veri.get("answers") or {}).items():
-        if isinstance(a, dict) and a.get("noul") is not None:
-            out[q] = float(a["noul"])
-    if not out:
-        raise ValueError("bos_answers")
-    return out
+    return .15, JEV_TUT
 
 
 def jev_kararlar(kayitlar, baslik, son_kullanici, esik_at=JEV_AJ, esik_tut=JEV_TUT,
                  timeout=25):
-    """Buyuk arac ciktilarini Jev'e toplu sorar.
+    """Buyuk arac ciktilarini Clef'e toplu sorar.
     Doner: (karar: {idx: (eylem, noul)}, bilgi: dict)
       eylem: 'sil' | 'tut' | 'kirp'  — hata durumunda karar bos, bilgi['hata'] dolu."""
     karar, bilgi = {}, {"motor": KARAR_MOTORU}
-    if KARAR_MOTORU != "laya" and not _jev_anahtar():
-        return karar, {"hata": "anahtar_yok", "motor": KARAR_MOTORU}
     if esik_at == JEV_AJ:
         esik_at, esik_tut = karar_esikleri()
     # durum (state): paket basligi + son kullanici mesajlari — Jev 'ne yapilmakta' bilsin
@@ -542,7 +465,7 @@ def jev_kararlar(kayitlar, baslik, son_kullanici, esik_at=JEV_AJ, esik_tut=JEV_T
             ornek = c[:JEV_ONEK] + ("\n[…]\n" + c[-JEV_SON:] if len(c) > JEV_ONEK + JEV_SON else "")
             sorular[f"n{j}"] = soru_sablon + ornek
             qmap[f"n{j}"] = i
-        _laya_guven.clear()
+        _karar_confidence.set({})
         try:
             cevap, bilgi["motor"] = karar_batch(durum, sorular, timeout)
         except ValueError as e:
@@ -552,8 +475,8 @@ def jev_kararlar(kayitlar, baslik, son_kullanici, esik_at=JEV_AJ, esik_tut=JEV_T
             i = qmap.get(q)
             if i is None:
                 continue
-            g = _laya_guven.get(q)
-            if g is not None and g < LAYA_MIN_GUVEN:
+            g = karar_guven().get(q)
+            if g is not None and g < KARAR_MIN_GUVEN:
                 # dusuk guvenli karar: silme/kirpma yonunde kullanilmaz, icerik korunur
                 karar[i] = ("tut", round(n, 3))
                 bilgi["dusuk_guven"] = bilgi.get("dusuk_guven", 0) + 1
@@ -638,11 +561,20 @@ def paketle(kayitlar, sozluk, sabitler, baslik=None):
 
 
 def paket_yaz(yol, mbayt, vbayt):
-    with open(yol, "wb") as f:
-        f.write(IMZA)
-        f.write(struct.pack("<II", len(mbayt), len(vbayt)))
-        f.write(mbayt)
-        f.write(vbayt)
+    import tempfile
+    parent = os.path.dirname(os.path.abspath(yol))
+    os.makedirs(parent, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".czip-", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(IMZA)
+            f.write(struct.pack("<II", len(mbayt), len(vbayt)))
+            f.write(mbayt); f.write(vbayt)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(temporary, yol)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def paket_oku(yol):
@@ -686,27 +618,31 @@ def tam_ilet(k, sozluk, reasoning=True):
 
 
 # ------------------------------------------------------------- yuksuk seviye
-def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
+def sikistir(mesajlar, cikti, mod="eksiksiz", arac_bas=2000, arac_son=2000,
              baslik=None, kaynak_bayt=None, jev=False):
     """Mesaj listesi -> .hkp paketi. Sozluk doner (hata durumunda 'hata' anahtari).
-    jev=True: 'akilli' modda buyuk arac ciktilarini Jev'e toplu sor; olu olanlar
+    jev=True: 'akilli' modda buyuk arac ciktilarini Clef'e toplu sor; olu olanlar
     paketten cikarilir (iz birakarak), gerekenler OLDUGU GIBI kalir, ortalar statik
-    dilime duser. Jev'e ulasilamazsa mevcut statik dilim davranisina doner."""
+    dilime duser. Clef'e ulasilamazsa mevcut statik dilim davranisina doner."""
+    mod = {"full":"eksiksiz", "smart":"akilli"}.get(mod, mod)
+    if mod not in ("eksiksiz", "akilli"):
+        raise ValueError(T("Mode must be full or smart", "Mod eksiksiz veya akilli olmalı"))
     sabit_adaylari = {}
     kayitlar = []
     for m in mesajlar:
-        k = kayit_yap(m, sabit_adaylari)
+        k = kayit_yap(m, sabit_adaylari, eksiksiz=mod == "eksiksiz")
         if k is None:
             continue
-        for a in ("c", "e", "e2"):
-            if a in k:
-                k[a] = bosluk_temizle(k[a])
-        # Arac cagrisi argumanlari da metin: govdeye uygulanan kod-farkindali
-        # temizlik onlara da uygulanir. Olcum: argumanlar toplam karakterin
-        # %35,7'si — temizlikten muaf tutulmalari icin sebep yok.
-        for g in k.get("tc") or []:
-            if isinstance(g.get("a"), str):
-                g["a"] = bosluk_temizle(g["a"])
+        if mod == "akilli":
+            for a in ("c", "e", "e2"):
+                if a in k:
+                    k[a] = bosluk_temizle(k[a])
+            # Arac cagrisi argumanlari da metin: govdeye uygulanan kod-farkindali
+            # temizlik onlara da uygulanir. Olcum: argumanlar toplam karakterin
+            # %35,7'si — temizlikten muaf tutulmalari icin sebep yok.
+            for g in k.get("tc") or []:
+                if isinstance(g.get("a"), str):
+                    g["a"] = bosluk_temizle(g["a"])
         kayitlar.append(k)
     eksikler = []
     jev_bilgi = None
@@ -721,7 +657,7 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
         eylem = kararlar.get(i, (None, None))[0]
         if eylem == "sil":
             noul = kararlar[i][1]
-            k["c"] = f"[JEV-SILINDI noul={noul} — kaynak girdide duruyor]"
+            k["c"] = f"[CLEF-SILINDI noul={noul} — kaynak girdide duruyor]"
             eksikler.append({"i": i, "bayt": len(c) - len(k["c"]), "jev": "sil"})
         elif eylem == "tut":
             continue  # oldugu gibi kalir, statik dilim uygulanmaz
@@ -746,7 +682,7 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
         c = k.get("c")
         if k.get("r") != "tool" or not isinstance(c, str) or len(c) < 200:
             continue
-        if c.startswith("[JEV-SILINDI") or c.startswith("[AYNI-#"):
+        if c.startswith(("[CLEF-SILINDI", "[JEV-SILINDI")) or c.startswith("[AYNI-#"):
             continue
         h = hashlib.blake2b(c.encode("utf-8", "replace"), digest_size=16).digest()
         ilk = ilk_gorulen.get(h)
@@ -779,7 +715,12 @@ def sikistir(mesajlar, cikti, mod="akilli", arac_bas=2000, arac_son=2000,
             tekrar_bayt += len(a) - len(g["a"])
 
     sozluk = Sozluk()
-    sozluk_gecis(kayitlar, sozluk)
+    # A literal codec marker in source text must never become a dictionary lookup.
+    # Keep LZMA compression, but omit token substitution for such packages.
+    fields = [value for k in kayitlar for value in (k.get("c"), k.get("e"), k.get("e2"))]
+    fields.extend(g.get("a") for k in kayitlar for g in k.get("tc", []))
+    if not any(isinstance(value, str) and JETON_RE.search(value) for value in fields):
+        sozluk_gecis(kayitlar, sozluk)
     mbayt, vbayt = paketle(kayitlar, sozluk, sabit_adaylari, baslik)
     yol = os.path.expanduser(cikti)
     if yol.endswith(".hzip"):
@@ -822,7 +763,7 @@ def kilavuz(dosya, son_n=6):
             sat["arac"] = [g.get("n", "?") for g in k["tc"]]
         indeks.append(sat)
     son = []
-    for k in kayitlar[-son_n:]:
+    for k in (kayitlar[-son_n:] if son_n > 0 else []):
         it = tam_ilet(k, sozluk)
         for a in ("icerik", "reasoning"):
             if a in it and len(it[a]) > 6000:
@@ -895,7 +836,8 @@ def iceri_ac(dosya, parca=0):
 
 # ------------------------------------------------------------- state.db (RO)
 def db_yolu():
-    return os.environ.get("HERMES_STATE_DB", os.path.expanduser("~/.hermes/state.db"))
+    return os.path.expanduser(session_env("HERMES_STATE_DB") or
+                             os.path.join(session_env("HERMES_HOME", "~/.hermes"), "state.db"))
 
 
 def _db():
@@ -935,15 +877,38 @@ def oturum_oku(session_id):
 
 
 def oturum_sec(con, session_id):
-    if session_id in ("son", "en-son"):
-        return con.execute("SELECT session_id FROM messages GROUP BY session_id "
-                           "ORDER BY MAX(COALESCE(timestamp,0)) DESC LIMIT 1").fetchone()[0]
+    if session_id in ("aktif", "active", "current", "son", "en-son", "last", "latest"):
+        identity = session_identity()
+        if identity:
+            if identity[0] != "hermes":
+                raise ValueError(T("Use this Codex thread's rollout file, not a Hermes last-session selector",
+                                   "Bu Codex sohbetinin rollout dosyasını kullan; Hermes son-oturum seçicisini kullanma"))
+            sid = session_env("HERMES_SESSION_ID")
+            key = session_env("HERMES_SESSION_KEY")
+            for candidate in (sid, key):
+                if candidate and con.execute("SELECT 1 FROM messages WHERE session_id=?", (candidate,)).fetchone():
+                    return candidate
+            if key:
+                try:
+                    rows = con.execute("SELECT id FROM sessions WHERE session_key=?", (key,)).fetchall()
+                    if len(rows) == 1:
+                        return rows[0][0]
+                except sqlite3.OperationalError:
+                    pass
+            raise ValueError(T("Caller session not found; give its exact ID", "Komutu veren oturum bulunamadı; tam kimliğini ver"))
+        if session_id in ("aktif", "active", "current"):
+            raise ValueError(T("Caller session context is missing", "Komutu veren oturum bağlamı yok"))
+        raise ValueError(T("Caller context missing; give an exact session ID", "Oturum bağlamı yok; tam oturum kimliğini ver"))
     if session_id in ("en-uzun", "en-buyuk"):
         return con.execute("SELECT session_id FROM messages GROUP BY session_id "
                            "ORDER BY SUM(COALESCE(LENGTH(content),0)+COALESCE(LENGTH(reasoning),0)) DESC LIMIT 1"
                            ).fetchone()[0]
-    es = con.execute("SELECT DISTINCT session_id FROM messages WHERE session_id LIKE ?",
-                     (session_id + "%",)).fetchall()
+    exact = con.execute("SELECT DISTINCT session_id FROM messages WHERE session_id=?", (session_id,)).fetchall()
+    if exact:
+        return exact[0][0]
+    escaped = str(session_id).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    es = con.execute("SELECT DISTINCT session_id FROM messages WHERE session_id LIKE ? ESCAPE '\\'",
+                     (escaped + "%",)).fetchall()
     if len(es) != 1:
         # Yanlislikla '+' ve if/else onceligi karisiyordu; 0-eslesme durumunda
         # 'N eslesme:' metni None ile toplanip TypeError patlatabilirdi.
@@ -1003,12 +968,13 @@ def yeni_ad(baslik, sid=""):
 
 
 def son_paket(dizin=None):
-    """Paket dizinindeki en yeni .hkp yolu (yoksa None)."""
-    d = os.path.expanduser(dizin or PAKET_DIZIN)
-    if not os.path.isdir(d):
-        return None
-    dosyalar = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".hkp")]
-    return max(dosyalar, key=os.path.getmtime) if dosyalar else None
+    """Latest registered package owned by this caller/profile; no global fallback."""
+    owner = owner_key()
+    if owner:
+        matches = [value for value in _kayit_oku().values() if isinstance(value, dict) and
+                   value.get("owner") == owner and os.path.isfile(value.get("yol", ""))]
+        return max(matches, key=lambda v: v.get("created_ns", 0))["yol"] if matches else None
+    return None
 
 
 # ============================================================ RAG-ONCELIKLI OKUMA
@@ -1043,19 +1009,29 @@ def harita(dosya, son_n=6, istek_max=40):
                 istekler.append((i, c[:96]))
     tekrar = sum(1 for k in kayitlar
                  if isinstance(k.get("c"), str) and k["c"].startswith("[AYNI-#"))
+    son_n = max(0, min(int(son_n), 6))
+    istek_max = max(0, min(int(istek_max), 40))
+    tail = []
+    for i in range(max(0, len(kayitlar)-son_n), len(kayitlar)):
+        item = tam_ilet(kayitlar[i], sozluk, reasoning=False)
+        content = str(item.get("icerik") or "")
+        tail.append({"i":i, "rol":item["rol"], "icerik":content[:900],
+                     "kirpildi":len(content)>900,
+                     "arac":[str(call.get("name", ""))[:80] for call in item.get("tool_calls", [])[:8]]})
     return {
-        "baslik": meta.get("b") or os.path.basename(dosya),
+        "baslik": meta.get("baslik") or meta.get("b") or os.path.basename(dosya),
         "toplam": len(kayitlar),
         "roller": roller,
         "araclar": sorted(araclar.items(), key=lambda x: -x[1])[:12],
         "tekrar_isaretli": tekrar,
-        "istekler": istekler[-istek_max:],
+        "istekler": istekler[-istek_max:] if istek_max else [],
         "istek_toplam": len(istekler),
-        "son": [tam_ilet(k, sozluk) for k in kayitlar[-son_n:]],
-        "talimat": ("INDEX IS NOT LOADED. This is a map, not the transcript. "
+        "son": tail,
+        "talimat": T("INDEX IS NOT LOADED. This is a map, not the transcript. "
                     "To get content: `czip ara <id> \"<query>\"` for keyword hits, "
                     "then `czip aralik <id> <a-b>` for the exact messages. "
-                    "Never dump the whole package. Work from the last messages below."),
+                    "Never dump the whole package. Work from the last messages below.",
+                    "Bu harita döküm değildir. İçerik için czip ara <kimlik> \"sorgu\", ardından czip aralik <kimlik> <ilk-son> kullan. Paketin tamamını yükleme."),
     }
 
 
@@ -1077,31 +1053,11 @@ _ALIAS = {
     "help": "yardim",
     "task": "gorev",
     "prompt": "gorev",
+    "yardım": "yardim",
+    "paket": "paketle",
+    "birleştir": "birlestir",
+    "aralık": "aralik",
 }
-
-# Output language: English by default; CZIP_LANG=tr restores Turkish.
-def _env_dosyasindan(ad):
-    """Ortam yoksa HERMES_HOME/.env'den oku (_jev_anahtar deseni — CLI/cron/MCP'nin
-    hepsi gateway shell'ini miras almak zorunda değil, .env tek ortak nokta)."""
-    yol = os.path.join(os.environ.get("HERMES_HOME",
-                                      os.path.expanduser("~/.hermes")), ".env")
-    try:
-        with open(yol, encoding="utf-8") as f:
-            for satir in f:
-                m = re.match(r"\s*" + re.escape(ad) + r"\s*=\s*(.+?)\s*$", satir)
-                if m:
-                    return m.group(1).strip().strip("'\"")
-    except OSError:
-        pass
-    return ""
-
-LANG = (os.environ.get("CZIP_LANG") or _env_dosyasindan("CZIP_LANG") or "en").strip().lower()[:2]
-
-
-def T(en, tr):
-    """Pick the output string for the active language."""
-    return tr if LANG == "tr" else en
-
 
 def _karar_kaynagi(ad):
     """Karar kaynagi etiketini ekrana basarken cevirir.
@@ -1114,53 +1070,49 @@ def _karar_kaynagi(ad):
 
 # ------------------------------------------------------------- CLI
 def _main(argv):
-    return _main_ici(argv)
+    from czip_runtime import output_language
+    values = list(argv); chosen = None
+    for flag in ("--lang", "--dil"):
+        if flag in values:
+            i = values.index(flag)
+            if i+1 >= len(values):
+                print(hata(T("Language value required", "Dil değeri gerekli"))); return 2
+            chosen = values[i+1]; del values[i:i+2]
+    for value in list(values):
+        if value.startswith(("--lang=", "--dil=")):
+            chosen = value.split("=",1)[1]; values.remove(value)
+    if chosen and chosen not in ("tr", "en"):
+        print(hata(T("Language must be tr or en", "Dil tr veya en olmalı"))); return 2
+    flags = {"--full":"--eksiksiz", "--smart":"--akilli", "--clef":"--jev", "--auto":"--oto", "--auto-archive":"--oto-pasif", "--no-archive":"--pasif-yok"}
+    prefixes = {"--days=":"--gun=", "--export=":"--dokum=", "--type=":"--tip=", "--title=":"--baslik=", "--query=":"--ara="}
+    normalized = []
+    for value in values:
+        value = flags.get(value, value)
+        for old, new in prefixes.items():
+            if value.startswith(old): value = new + value[len(old):]; break
+        normalized.append(value)
+    with output_language(chosen):
+        try:
+            return _main_ici(normalized)
+        except (ValueError, OSError) as error:
+            print(hata(error)); return 2
 
 def _main_ici(argv):
-    """czip komutlari:
-      czip paketle <session_id|son|en-uzun> [--eksiksiz] [--jev]   -> oturumu paketle
-      czip oku <paket.hkp|son>                             -> indeks + son 6 + durum
-      czip aralik <paket.hkp|son> <bas-bit>                -> secili araligi tam oku
-    --jev: akilli modda buyuk arac ciktilarini karar kapisina sor (varsayilan motor:
-           Laya — yerel, anahtarsiz; CZIP_KARAR_MOTORU=jev ile TypeSafe/Jev'e doner);
-           olu sayilan ciktilar paketten cikar.
-    """
-    if not argv or argv[0] in ("-h", "--help", "yardim"):
-        print(T(
-            "Usage:  (Turkish verbs still work: pack/paketle, read/oku, merge/birlestir, ...)\n"
-            "  czip pack <session_id|son|en-uzun|FILE> [--eksiksiz] [--jev]\n"            "                 [--json] machine-readable result (for integrations)\n"
-            "                 [--oto] pull sessions doing the same work into one package\n"
-            "                 [--oto-pasif] also close + archive the sources\n"
-            "  czip read <package.hkp|son>\n"
-            "  czip range <package.hkp|son> <start-end>\n"
-            "  czip merge [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
-            "                 [--dokum=<export.zip|transcript.jsonl>] add a non-Hermes session\n"
-            "  czip map <id|son>       -> RAG map (~1.5k tokens; the cheap form of read)\n"
-            "  czip settings [esik 50|kademe 50,75,90|oto on]  -> thresholds & auto mode\n"
-            "  czip index [--full]     -> build the searchable store over all packages\n"
-            "  czip asearch \"<query>\"   -> search the whole archive (long-term memory)\n"
-            "  czip task save --tip=promt|plan --baslik=\"...\"  (body from stdin)\n"
-            "  czip task list [--tip=promt|plan] [--n=20] [--ara=<text>]\n"
-            "  czip task read <kid|son>  -> print the approved prompt/plan in full\n"
-            "  czip undo [<file>]      -> reopen deactivated sessions",
-            "Kullanim:\n"
-            "  czip paketle <session_id|son|en-uzun|DOSYA> [--eksiksiz] [--jev]\n"
-            "                 [--oto] ayni isi yapanlari da ayni pakete al\n"
-            "                 [--oto-pasif] ayrica kaynaklari kapat+arsivle\n"
-            "  czip oku <paket.hkp|son>\n"
-            "  czip aralik <paket.hkp|son> <bas-bit>\n"
-            "  czip birlestir [oto|<id1> <id2> ...] [--jev] [--gun=7] [--pasif-yok]\n"
-            "                 [--dokum=<export.zip|transcript.jsonl>] Hermes disi oturum ekle\n"
-            "  czip harita <id|son>    -> RAG haritasi (~1.5k token; oku'nun ucuz hali)\n"
-            "  czip ayar [esik 50|kademe 50,75,90|oto on]  -> esikler ve oto mod\n"
-            "  czip index [--full]     -> tum paketler uzerinde aranabilir depo kur\n"
-            "  czip arsivara \"<sorgu>\"  -> tum arsivde ara (uzun donem hafiza)\n"
-            "  czip gorev kaydet --tip=promt|plan --baslik=\"...\"  (govde stdin'den)\n"
-            "  czip gorev listele [--tip=promt|plan] [--n=20] [--ara=<metin>]\n"
-            "  czip gorev oku <kid|son>  -> onaylanmis promt/plani tam bas\n"
-            "  czip gerial [<dosya>]   -> pasife alinan oturumlari geri ac"))
+    """Parse the shared bilingual command surface."""
+    if not argv or argv[0] in ("-h", "--help", "yardim", "help", "yardım"):
+        from czip_commands import help_text
+        print(help_text())
         return 0
     emir, kalan = argv[0], argv[1:]
+    if emir in ("prompt", "promt", "plan"):
+        kind = "plan" if emir == "plan" else "promt"
+        kalan = [*(kalan or ["list"]), "--tip=" + kind]; emir = "task"
+    if emir in ("threshold", "esik", "eşik"):
+        kalan = ["esik", *kalan]; emir = "ayar"
+    if emir in ("end", "sonlandir", "sonlandır"):
+        from plugin import _son
+        print(_son(" ".join(__import__("shlex").quote(x) for x in kalan)))
+        return 0
     # English is the primary CLI; the original Turkish verbs keep working.
     emir = _ALIAS.get(emir, emir)
     # /czip_50 , /czip_%75 , czip 50%  -> shorthand for "ayar esik <n>"
@@ -1169,9 +1121,12 @@ def _main_ici(argv):
         kalan = ["esik", _m.group(1)] + list(kalan)
         emir = "ayar"
     elif emir in ("auto", "oto"):
-        kalan = ["oto", (kalan[0] if kalan else "on")]
+        kalan = [] if not kalan or kalan[0] in ("status", "durum") else ["oto", {"aç":"on", "ac":"on", "kapat":"off"}.get(kalan[0], kalan[0])]
         emir = "ayar"
 
+    if emir == "verify-source":
+        if len(kalan) != 3: raise ValueError("verify-source PACKAGE_ID PATH SOURCE_ID")
+        print(json.dumps(verify_package_source(*kalan), ensure_ascii=False)); return 0
     if emir == "gorev":
         # Onaylanmis promt/plan deposu (bkz. gorev.py). Govde stdin'den okunur:
         # metni argumana koymak uzun promptlarda kotalama/kacis derdi yaratirdi.
@@ -1198,7 +1153,7 @@ def _main_ici(argv):
         if alt in ("oku", "read", "show"):
             hedef = next((a for a in kalan[1:] if not a.startswith("--")), "son")
             try:
-                r = _g.oku(hedef)
+                r = _g.oku(hedef, tip=bayrak.get("tip"))
             except Exception as e:
                 print(hata(e))
                 return 1
@@ -1227,11 +1182,15 @@ def _main_ici(argv):
         return 1
 
     if emir == "birlestir":
+        if any(x in ("oto", "auto") for x in kalan):
+            raise ValueError(T("Merge requires explicit session IDs", "Birleştirme açık oturum kimlikleri gerektirir"))
         # Ayni isi yapan 2+ oturumu TEK pakette birlestirir (bkz. birlestir.py).
         # Argumansiz: salt-okunur aday taramasi, hicbir sey yazmaz.
         import birlestir as _b
+        if any(x.startswith("--") and x not in ("--jev", "--eksiksiz", "--akilli", "--pasif-yok") and not x.startswith(("--gun=", "--dokum=")) for x in kalan):
+            raise ValueError(T("Unknown merge option", "Bilinmeyen birleştirme seçeneği"))
         jev = "--jev" in kalan
-        mod = "eksiksiz" if "--eksiksiz" in kalan else "akilli"
+        mod = "akilli" if "--akilli" in kalan else "eksiksiz"
         gun = 7
         for a in kalan:
             if a.startswith("--gun="):
@@ -1240,7 +1199,6 @@ def _main_ici(argv):
                 except ValueError:
                     pass
         idler = [a for a in kalan if not a.startswith("--") and a != "oto"]
-        oto = "oto" in kalan
         dokumler = [a.split("=", 1)[1] for a in kalan if a.startswith("--dokum=")]
         if dokumler:
             # Hermes disi dokumler (Claude Code disa aktarimi): state.db'de yok,
@@ -1265,7 +1223,7 @@ def _main_ici(argv):
             d = os.path.expanduser(PAKET_DIZIN)
             os.makedirs(d, exist_ok=True)
             temiz = re.sub(r"[^A-Za-z0-9-]+", "-", baslik[:48]).strip("-") or "birlesik"
-            yol = os.path.join(d, f"BIRLESIK-{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
+            yol = unique_package_path(d, "merged-" + baslik)
             r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
             kid = id_ata(r["yol"], baslik)
             print(T("MERGED: ", "BIRLESTIRILDI: ") + f"{r['yol']}\n  ID={kid}")
@@ -1293,7 +1251,7 @@ def _main_ici(argv):
             jb = iz.get("jev") or {}
             print(T(f"CANDIDATE SCAN — last {gun} days, {len(ciftler)} similar pairs",
                     f"ADAY TARAMASI — son {gun} gun, {len(ciftler)} benzer cift")
-                  + (f"  | Jev: {jb.get('hata') or str(jb.get('cevap')) + T(' answers', ' cevap')}" if jev else ""))
+                  + (f"  | Clef: {jb.get('hata') or str(jb.get('cevap')) + T(' answers', ' cevap')}" if jev else ""))
             for k in iz["kararlar"][:12]:
                 print(f"  {T('ACCEPT', 'KABUL') if k['kabul'] else T('  rej', '  red')}  {k['a']} <-> {k['b']}"
                       f"  {_karar_kaynagi(k['kaynak'])}={k['skor']:.2f}")
@@ -1305,17 +1263,13 @@ def _main_ici(argv):
             print(T("\nGROUPS:", "\nGRUPLAR:"))
             for i, g in enumerate(gruplar, 1):
                 print(f"  {i}) " + "  ".join(g))
-            if not oto:
-                print(T("\nTo apply: czip merge ", "\nUygulamak icin: czip birlestir ") + " ".join(gruplar[0])
-                      + (" --jev" if jev else ""))
-                return 0
-            idler = gruplar[0]
-            print(T("\nauto: merging group 1 ...", "\noto: 1. grup birlestiriliyor..."))
+            print(T("\nTo apply: czip merge ", "\nUygulamak için: czip birlestir ") + " ".join(gruplar[0]))
+            return 0
         mesajlar, baslik, rapor = _b.oturumlari_birlestir(idler)
         d = os.path.expanduser(PAKET_DIZIN)
         os.makedirs(d, exist_ok=True)
         temiz = re.sub(r"[^A-Za-z0-9-]+", "-", baslik[:48]).strip("-") or "birlesik"
-        yol = os.path.join(d, f"BIRLESIK-{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
+        yol = unique_package_path(d, "merged-" + baslik)
         r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
         kid = id_ata(r["yol"], baslik)
         print(T("MERGED: ", "BIRLESTIRILDI: ") + f"{r['yol']}\n  ID={kid}")
@@ -1327,27 +1281,8 @@ def _main_ici(argv):
         print(f"  {r['kaynak_bayt']}->{r['paket_bayt']}B  "
                   + T(f"ratio={r['oran']}x", f"oran={r['oran']}x"))
         print(T("  read: czip read ", "  oku: czip oku ") + kid)
-        if "--pasif-yok" in kalan or not oto:
-            print(T("  NOTE: source sessions sit untouched in state.db.",
-                    "  NOT: kaynak oturumlar state.db'de dokunulmadan duruyor."))
-            if not oto:
-                print(T("  To deactivate the sources too: czip merge auto --jev",
-                        "  Kaynaklari pasife de almak icin: czip birlestir oto --jev"))
-        else:
-            try:
-                pr = _b.pasife_al(idler, r["yol"], kid, sebep="czip_merge")
-                print(T("  DEACTIVATED: %d sessions closed+archived",
-                        "  PASIFE ALINDI: %d oturum kapatildi+arsivlendi") % len(pr["pasif"]))
-                for x in pr["atlanan"]:
-                    print(T("    skipped: ", "    atlandi: ") + f"{x['sid']} ({x['neden']})")
-                print(T("  UNDO: czip undo ", "  GERI AL: czip gerial ")
-                      + os.path.basename(pr["gerial"]))
-                print(T("  (no message was deleted — sessions are only hidden from the list)",
-                        "  (hicbir ileti silinmedi — oturumlar yalnizca listeden gizlendi)"))
-            except Exception as _e:
-                print(T("  ! DEACTIVATION FAILED: ", "  ! PASIFE ALMA BASARISIZ: ") + str(_e)[:90])
-                print(T("    Package WRITTEN but the source sessions stayed OPEN — close them by hand.",
-                        "    Paket URETILDI ama kaynak oturumlar ACIK kaldi — elle kapat."))
+        print(T("  Source sessions remain unchanged. Use end with an exact ID to archive one.",
+                "  Kaynak oturumlar aynı kalır. Bir oturumu arşivlemek için tam kimlikle end kullan."))
         print(T("\n  NEW SESSION NAME: ", "\n  YENI OTURUM ADI: ") + yeni_ad(baslik))
         print(T("\n  HANDOVER (first thing in the new session):",
                 "\n  DEVIR TALIMATI (yeni oturumda ilk is):"))
@@ -1357,7 +1292,7 @@ def _main_ici(argv):
     if emir == "gerial":
         import birlestir as _b
         if not kalan:
-            d = os.path.expanduser(_b.GERIAL_DIZIN)
+            d = _b.gerial_dizin()
             if not os.path.isdir(d) or not os.listdir(d):
                 print(T("Nothing to undo.", "Geri alinacak kayit yok."))
                 return 0
@@ -1373,139 +1308,45 @@ def _main_ici(argv):
             print("  " + x)
         return 0
     if emir == "paketle":
-        if not kalan:
-            print(T("ERROR: session_id required (or 'son' / 'en-uzun')",
-                    "HATA: session_id gerekir (veya 'son' / 'en-uzun')"))
-            return 2
-        sid = kalan[0]
-        mod = "eksiksiz" if "--eksiksiz" in kalan[1:] else "akilli"
-        jev = "--jev" in kalan[1:]
-        # --oto: ayni isi yapan oturumlari SADECE UYARMA, dogrudan ayni pakete al.
-        # Karari Jev verir (Jev yoksa yerel esik). --oto-pasif ayrica kaynaklari
-        # kapatir+arsivler (geri alinabilir: czip gerial).
-        oto = "--oto" in kalan[1:] or "--oto-pasif" in kalan[1:]
-        oto_pasif = "--oto-pasif" in kalan[1:]
-        birlesenler = []
-        if oto:
+        flags = [x for x in kalan if x.startswith("--")]
+        targets = [x for x in kalan if not x.startswith("--")]
+        if any(x in flags for x in ("--oto", "--oto-pasif")):
+            raise ValueError(T("Use merge with explicit session IDs; packing never auto-merges", "Açık oturum kimlikleriyle birlestir kullan; paketleme otomatik birleştirmez"))
+        if set(flags) - {"--eksiksiz", "--akilli", "--jev", "--json", "--yalniz"}:
+            raise ValueError(T("Unknown packing option", "Bilinmeyen paketleme seçeneği"))
+        if len(targets) > 1 or (not targets and not session_identity()):
+            raise ValueError(T("Give one exact session ID or transcript path", "Tek bir tam oturum kimliği veya dosya yolu ver"))
+        target = targets[0] if targets else "active"
+        if os.path.isfile(os.path.expanduser(target)):
+            messages = girdi_ayristir(target)
+            title = os.path.splitext(os.path.basename(target))[0]
+            source = "file:" + os.path.abspath(os.path.expanduser(target))
             try:
-                import birlestir as _b
-                aday = [x["sid"] for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
-            except Exception as _e:
-                aday = []
-                print(T("WARNING: auto-merge scan failed: %s",
-                        "UYARI: oto-birlestirme taramasi basarisiz: %s") % str(_e)[:90])
-            if aday:
-                birlesenler = [sid] + aday
-                print(T("AUTO-MERGE: %d sessions into one package (decided by: %s)",
-                        "OTO-BIRLESTIRME: %d oturum tek pakete aliniyor (karar: %s)")
-                      % (len(birlesenler), "jev" if jev else T("local", "yerel")))
-                for x in birlesenler:
-                    print("   " + x)
-                sid_asil = sid
-                mesajlar, baslik, rapor = _b.oturumlari_birlestir(birlesenler)
-                sid = sid_asil
-                print(T("   %d -> %d msgs (duplicates dropped: %d)",
-                        "   %d -> %d ilet (yinelenen atilan: %d)")
-                      % (rapor["kaynak_ilet"], rapor["birlesik_ilet"],
-                         rapor["yinelenen_atilan"]))
-            else:
-                print(T("AUTO-MERGE: no other session doing the same work.",
-                        "OTO-BIRLESTIRME: ayni isi yapan baska oturum bulunmadi."))
-        if not birlesenler:
-            # Bir DOSYA verildiyse oturum kimligi gibi aramadan dogrudan onu paketle.
-            # girdi_ayristir zaten JSON / JSONL / duz metin / Hermes export blogu
-            # ve mesaj listesi biliyor; tek eksik CLI'ye bagli olmamasiydi.
-            _aday = os.path.expanduser(sid)
-            if os.path.isfile(_aday):
-                mesajlar = girdi_ayristir(_aday)
-                if not mesajlar:
-                    print(T("ERROR: file is empty or unparseable: %s",
-                            "HATA: dosya bos ya da cozulemedi: %s") % _aday)
-                    return 2
-                baslik = os.path.splitext(os.path.basename(_aday))[0][:60]
-                # JSON disa aktarimlarinda gercek baslik govdede olabilir.
-                try:
-                    with open(_aday, encoding="utf-8", errors="replace") as _f:
-                        _j = json.load(_f)
-                    if isinstance(_j, dict):
-                        baslik = str(_j.get("title") or _j.get("baslik") or baslik)[:60]
-                except Exception:
-                    pass
-                sid = "dosya:" + os.path.basename(_aday)
-                print(T("FILE INPUT: %s  (%d messages)",
-                        "DOSYA GIRDISI: %s  (%d ileti)") % (_aday, len(mesajlar)))
-            else:
-                sid, mesajlar, baslik = oturum_oku(sid)
-        d = os.path.expanduser(PAKET_DIZIN)
-        os.makedirs(d, exist_ok=True)
-        temiz = re.sub(r"[^A-Za-z0-9-]+", "-", (baslik or sid)[:48]).strip("-") or sid
-        yol = os.path.join(d, f"{temiz}-{time.strftime('%Y%m%d-%H%M%S')}.hkp")
-        r = sikistir(mesajlar, yol, mod, baslik=baslik, jev=jev)
-        kid = id_ata(r["yol"], baslik or sid)
-        kirp = len(r.get("eksik_bildirim") or [])
-        jv = r.get("jev") or {}
-        jtxt = ("" if not jv else
-                f"\n  {jv.get('motor', 'jev')}: sorgu={jv.get('sorgu', 0)} sil={jv.get('sil', 0)} "
-                f"tut={jv.get('tut', 0)} kirp={jv.get('kirp', 0)} "
-                f"sure={jv.get('sure_sn')}sn" + (f" HATA={jv.get('hata')}" if jv.get('hata') else ""))
-        if "--json" in kalan[1:]:
-            # Makine-okunur cikti. Sebep: cagiran taraflar (czip-tasi plugin'i)
-            # ekran metnini kaziyordu; cikti dili Ingilizce'ye cevrilince
-            # 'PAKETLENDI:' araniyordu ve kid BOS donuyordu — sessiz kirilma.
-            # Dil degisimi bir daha entegrasyonu bozmasin diye sozlesme burada.
-            print(json.dumps({"ok": True, "kid": kid, "yol": r["yol"],
-                              "ilet": r["mesaj"], "oran": r["oran"],
-                              "kaynak_bayt": r["kaynak_bayt"],
-                              "paket_bayt": r["paket_bayt"], "mod": r["mod"],
-                              "parca": r["parca"], "baslik": baslik or sid,
-                              "yeni_oturum_adi": yeni_ad(baslik, sid)},
-                             ensure_ascii=False))
-            return 0
-        print(T("PACKED: ", "PAKETLENDI: ") + f"{r['yol']}\n  ID={kid}\n  "
-              + T("msgs=", "ilet=") + f"{r['mesaj']}  {r['kaynak_bayt']}->{r['paket_bayt']}B"
-              + T(f"  ratio={r['oran']}x  chunks={r['parca']}",
-                  f"  oran={r['oran']}x  parca={r['parca']}")
-              + ((T("  trimmed_tools=", "  kirpilan_arac=") + str(kirp)) if kirp else "")
-              + ((T("  dedup=", "  tekrar_ayiklandi=")
-                  + f"{r['tekrar']}(-{r['tekrar_bayt']//1024}KB)") if r.get("tekrar") else "")
-              + jtxt
-              + T(f"\n  read: czip read {kid}   search: czip search {kid} \"query\"",
-                  f"\n  oku: czip oku {kid}   ara: czip ara {kid} \"sorgu\""))
-        print(T("  new session name: ", "  yeni oturum adi: ") + yeni_ad(baslik, sid))
-        # AYNI ISI YAPAN OTURUM UYARISI — paketledikten sonra, karari Jev verir.
-        # --yalniz ile kapatilir (tarama Jev cagrisi yapar, her zaman istenmez).
-        if oto and birlesenler and oto_pasif:
-            try:
-                import birlestir as _b2
-                pr = _b2.pasife_al(birlesenler, r["yol"], kid, sebep="czip_oto_merge")
-                print(T("  DEACTIVATED: %d sessions (undo: czip undo %s)",
-                        "  PASIFE ALINDI: %d oturum (geri al: czip gerial %s)")
-                      % (len(pr["pasif"]), os.path.basename(pr["gerial"])))
-            except Exception as _e:
-                print(T("  ! DEACTIVATION FAILED: %s",
-                        "  ! PASIFE ALMA BASARISIZ: %s") % str(_e)[:110])
-                print(T("    Package WRITTEN, sources stayed OPEN.",
-                        "    Paket URETILDI, kaynaklar ACIK kaldi."))
-        if "--yalniz" not in kalan[1:] and not oto and not str(sid).startswith("dosya:"):
-            try:
-                import birlestir as _b
-                benzer = [x for x in _b.benzerleri_bul(sid, jev=jev) if x["kabul"]]
-                if benzer:
-                    print(T(f"\n  ! {len(benzer)} MORE SESSIONS DOING THE SAME WORK",
-                            f"\n  ! AYNI ISI YAPAN {len(benzer)} OTURUM DAHA VAR")
-                          + T(f" (decided by: {_karar_kaynagi(benzer[0]['kaynak'])}):",
-                              f" (karar: {benzer[0]['kaynak']}):"))
-                    for x in benzer[:5]:
-                        print(f"      {x['sid']}  {_karar_kaynagi(x['kaynak'])}={x['skor']:.2f}  {x['ozet'][:62]}")
-                    print(T("    To put them all in ONE package:",
-                            "    Hepsini TEK pakete almak icin:"))
-                    print(T("      czip merge ", "      czip birlestir ") + sid + " "
-                          + " ".join(x["sid"] for x in benzer[:5]) + " --jev")
-                    print(T("    To merge and deactivate the sources:  czip merge auto --jev",
-                            "    Birlestirip kaynaklari pasife almak icin:  czip birlestir oto --jev"))
-            except Exception as _e:
-                print(T("    (similar-session scan skipped: %s)",
-                        "    (benzer oturum taramasi atlandi: %s)") % str(_e)[:70])
+                with open(os.path.expanduser(target), encoding="utf-8") as stream:
+                    data = json.load(stream)
+                if isinstance(data, dict): title = data.get("title") or data.get("baslik") or title
+            except (ValueError, OSError):
+                pass
+        else:
+            source, messages, title = oturum_oku(target)
+        if not messages:
+            raise ValueError(T("The selected source is empty", "Seçilen kaynak boş"))
+        mode = "akilli" if "--akilli" in flags else "eksiksiz"
+        path = unique_package_path(PAKET_DIZIN, title or source)
+        result = sikistir(messages, path, mode, baslik=title, jev="--jev" in flags)
+        kid = id_ata(result["yol"], title, source_id=source)
+        payload = {"ok": True, "kid": kid, "yol": result["yol"], "source_id": source,
+                   "ilet": result["mesaj"], "oran": result["oran"], "kaynak_bayt": result["kaynak_bayt"],
+                   "paket_bayt": result["paket_bayt"], "mod": result["mod"], "parca": result["parca"],
+                   "baslik": title or source, "yeni_oturum_adi": yeni_ad(title, source)}
+        if "--json" in flags:
+            print(json.dumps(payload, ensure_ascii=False)); return 0
+        print(T("PACKED: ", "PAKETLENDİ: ") + result["yol"])
+        print("  ID=" + kid)
+        print(T("  %d messages | %d -> %d bytes", "  %d ileti | %d -> %d bayt") %
+              (result["mesaj"], result["kaynak_bayt"], result["paket_bayt"]))
+        print(T("  Read: czip map ", "  Oku: czip harita ") + kid)
+        print(T("  Only this source was packed; source sessions remain open.", "  Yalnız bu kaynak paketlendi; kaynak oturumlar açık kalır."))
         return 0
     if emir == "listele":
         kayit = _kayit_oku()
@@ -1557,34 +1398,24 @@ def _main_ici(argv):
                   + T("   (on = decide and pack without asking)",
                       "   (on = sormadan karar verip paketler)"))
             print("  oto_pasif : " + ("ON" if a["oto_pasif"] else "off"))
-            # "jev : ON" yanilticiydi: o bayrak yalniz KARAR KAPISI acik mi
-            # demek; hangi motorun calistigini soylemiyordu. Varsayilan motor
-            # Laya (yerel, anahtarsiz) — Jev bulut API'si degil.
-            kapi = a.get("jev", True)
-            print("  karar kapisi: " + ("ON" if kapi else "off")
-                  + (("   (motor: %s%s)" % (KARAR_MOTORU,
-                      T(", local", ", yerel") if KARAR_MOTORU == "laya"
-                      else T(", CLOUD", ", BULUT"))) if kapi else ""))
-            if kapi:
-                yedek = _bulut_yedegi_acik()
-                print("  bulut yedegi: " + ("ON" if yedek else "off")
-                      + (T("   (!! if Laya fails, session content goes to api.typesafe.ai)",
-                           "   (!! Laya cokerse oturum icerigi api.typesafe.ai'ye gider)")
-                         if yedek else
-                         T("   (if Laya fails the gate is skipped; nothing leaves the machine)",
-                           "   (Laya cokerse kapi atlanir; icerik disari cikmaz)")))
+            print(T("  decision gate: ", "  karar kapısı: ") + ("Clef" if a.get("clef", a.get("jev", False)) else T("off", "kapalı")))
+            print(T("  gate is local; cloud fallback is disabled", "  karar kapısı yerel; bulut yedeği kapalı"))
             return 0
         anahtar = kalan[0].lower()
         deger = kalan[1] if len(kalan) > 1 else ""
-        acik = deger.lower() in ("on", "acik", "1", "true", "evet", "yes")
+        acik = deger.lower() in ("on", "aç", "ac", "acik", "açık", "1", "true", "evet", "yes")
+        if anahtar in ("oto", "clef", "gate", "kapi", "jev") and deger.lower() not in ("on", "aç", "ac", "acik", "açık", "1", "true", "evet", "yes", "off", "kapat", "kapali", "kapalı", "0", "false", "hayir", "hayır", "no"):
+            raise ValueError(T("Use on or off", "aç veya kapat kullan"))
         try:
             if anahtar in ("esik", "threshold"):
                 o = float(deger.rstrip("%")) / (100.0 if float(deger.rstrip("%")) > 1 else 1.0)
+                if not 0 < o <= 1: raise ValueError("threshold")
                 _a.yaz(esik_oran=o)
                 print(T("threshold -> %%%d", "esik -> %%%d") % round(o * 100))
             elif anahtar in ("kademe", "tiers"):
                 ks = sorted({float(x.strip().rstrip("%")) / 100.0 if float(x.strip().rstrip("%")) > 1
                              else float(x.strip()) for x in deger.split(",") if x.strip()})
+                if not ks or any(not 0 < x <= 1 for x in ks): raise ValueError("tiers")
                 _a.yaz(kademeler=ks)
                 print(T("tiers -> %s", "kademeler -> %s")
                       % ", ".join("%%%d" % round(k * 100) for k in ks))
@@ -1604,11 +1435,10 @@ def _main_ici(argv):
                 _a.yaz(oto=acik)
                 print("oto -> " + ("ON" if acik else "off"))
             elif anahtar in ("oto-pasif", "oto_pasif"):
-                _a.yaz(oto_pasif=acik)
-                print("oto_pasif -> " + ("ON" if acik else "off"))
-            elif anahtar == "jev":
-                _a.yaz(jev=acik)
-                print("jev -> " + ("ON" if acik else "off"))
+                raise ValueError(T("Automatic closure is disabled; use end with an exact ID", "Otomatik kapatma devre dışı; tam kimlikle end kullan"))
+            elif anahtar in ("clef", "gate", "kapi", "jev"):
+                _a.yaz(clef=acik)
+                print("clef -> " + ("ON" if acik else "off"))
             else:
                 print(T("unknown setting: %s", "bilinmeyen ayar: %s") % anahtar)
                 return 2
@@ -1619,7 +1449,7 @@ def _main_ici(argv):
     if emir == "index":
         # Build/refresh the one searchable store over every package.
         import depo as _d
-        tam = "--full" in kalan or "--tam" in kalan
+        tam = "--eksiksiz" in kalan or "--tam" in kalan
         print(T("Indexing packages%s ...", "Paketler indeksleniyor%s ...")
               % (" (full rebuild)" if tam else ""))
         r = _d.guncelle(tam=tam)
@@ -1761,48 +1591,30 @@ def _main_ici(argv):
                 "IPUCU: ilgili i icin tam metin -> czip aralik %s \"i\" (veya i-i2)") % kalan[0])
         return 0
     if emir == "oku":
-        girdi = kalan[0] if kalan else None
-        yol = id_coz(girdi)
-        if not yol or not os.path.exists(yol):
-            print(T("ERROR: no package — first: czip pack <id>  (give an id or 'son')",
-                    "HATA: paket yok — once: czip paketle <id>  (id veya 'son' ver)"))
-            return 2
-        g = kilavuz(yol)
-        print(T("PACKAGE: ", "PAKET: ") + f"{g['baslik']} ({g['toplam']} "
-              + T("msgs)", "ilet)"))
-        print(T("INDEX:", "INDEKS:"))
-        for s in g["indeks"]:
-            ar = f"[{','.join(s['arac'])}]" if s.get("arac") else ""
-            print(f"{s['i']}|{s['rol']}{ar}|{s.get('ozet', '')}")
-        print(T("\n=== LAST MESSAGES (full) ===", "\n=== SON ILETLER (tam) ==="))
-        for it in g["son"]:
-            print(json.dumps({k: (v[:700] if isinstance(v, str) else v)
-                              for k, v in it.items()}, ensure_ascii=False))
-        print("\n=== DURUM ===")
-        print(json.dumps(g["durum"], ensure_ascii=False))
-        print("\nKURAL: " + g["talimat"])
-        return 0
+        if len(kalan) > 2:
+            raise ValueError(T("Read takes a package and optional range", "Oku bir paket ve isteğe bağlı aralık alır"))
+        return _main_ici(["aralik" if len(kalan) == 2 else "harita", *kalan])
     if emir == "harita":
         # RAG-oncelikli okuma: tam indeks YERINE ince harita (~1.5k token).
-        yol = id_coz(kalan[0]) if kalan else son_paket()
+        yol = id_coz(kalan[0] if kalan else None)
         if not yol or not os.path.exists(yol):
             print(T("ERROR: package not found:", "HATA: paket bulunamadi:"),
                   kalan[0] if kalan else "(son)")
             return 2
         h = harita(yol)
-        print("MAP %s | %d msgs | roles=%s | dedup=%d"
+        print(T("MAP %s | %d msgs | roles=%s | dedup=%d", "HARİTA %s | %d ileti | roller=%s | tekrar=%d")
               % (h["baslik"], h["toplam"],
                  ",".join("%s:%d" % kv for kv in sorted(h["roller"].items())),
                  h["tekrar_isaretli"]))
         if h["araclar"]:
-            print("TOOLS " + " ".join("%s:%d" % kv for kv in h["araclar"]))
-        print("REQUESTS %d total, last %d:" % (h["istek_toplam"], len(h["istekler"])))
+            print(T("TOOLS ", "ARAÇLAR ") + " ".join("%s:%d" % kv for kv in h["araclar"]))
+        print(T("REQUESTS %d total, last %d:", "İSTEKLER toplam %d, son %d:") % (h["istek_toplam"], len(h["istekler"])))
         for i, c in h["istekler"]:
             print("  %d| %s" % (i, c))
         # TAIL kompakt gosterim: JSON sarmalayicisi (alan adlari, tirnak, kacis)
         # olculdu -> son iletlerin %47'si sirf tören. Rol tek harfe iner,
         # icerik duz metin kalir. Okuyan AI icin kayip yok.
-        print("TAIL (%d full, R>=role: U=user A=assistant T=tool S=system):" % len(h["son"]))
+        print(T("TAIL (%d previews; exact text via range):", "SON İLETİLER (%d önizleme; tam metin için aralik):") % len(h["son"]))
         for it in h["son"]:
             rol = str(it.get("rol") or it.get("r") or "?")[:1].upper()
             ic = it.get("icerik")
@@ -1818,7 +1630,7 @@ def _main_ici(argv):
                         if isinstance(tc, list) else [str(tc)]
                 ek = "[" + ",".join(adlar) + "]"
             print("%s>%s %s" % (rol, ek, ic[:700]))
-        print("HOW " + h["talimat"])
+        print(T("HOW ", "KULLANIM ") + h["talimat"])
         return 0
     if emir == "aralik":
         if len(kalan) < 2:
